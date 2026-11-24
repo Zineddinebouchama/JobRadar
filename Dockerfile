@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
 WORKDIR /app
-ENV PYTHONUNBUFFERED=1 JOBRADAR_DB=/data/jobradar.db
+ENV PYTHONUNBUFFERED=1 POSTEDFRESH_DB=/data/postedfresh.db
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

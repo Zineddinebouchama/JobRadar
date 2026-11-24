@@ -18,7 +18,7 @@ import httpx
 from . import config, db
 from .normalize import html_to_text, make_job, salary_range
 
-log = logging.getLogger("jobradar.sources")
+log = logging.getLogger("postedfresh.sources")
 
 Fetcher = Callable[[httpx.AsyncClient], Awaitable[list[dict[str, Any]]]]
 

@@ -8,6 +8,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from . import locations
 from .config import DB_PATH
 
 _lock = threading.RLock()
@@ -30,7 +31,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     url           TEXT NOT NULL,
     logo          TEXT,
     posted_at     TEXT NOT NULL,           -- ISO-8601 UTC
-    first_seen_at TEXT NOT NULL,           -- when JobRadar first saw it
+    first_seen_at TEXT NOT NULL,           -- when PostedFresh first saw it
     description   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_posted   ON jobs(posted_at DESC);
@@ -58,7 +59,23 @@ CREATE TRIGGER IF NOT EXISTS jobs_au AFTER UPDATE ON jobs BEGIN
     INSERT INTO jobs_fts(rowid, title, company, department, tags, description)
     VALUES (new.rowid, new.title, new.company, new.department, new.tags, new.description);
 END;
+
+-- Clean places for each job (city, state/region, country, area), for the location filter.
+CREATE TABLE IF NOT EXISTS job_places (
+    job_id TEXT NOT NULL,
+    place  TEXT NOT NULL,
+    kind   TEXT NOT NULL,                  -- country | region | city | area
+    PRIMARY KEY (job_id, place)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_places_place ON job_places(place);
+CREATE TRIGGER IF NOT EXISTS jobs_places_ad AFTER DELETE ON jobs BEGIN
+    DELETE FROM job_places WHERE job_id = old.id;
+END;
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
+
+# Bump when the location parser changes so stored places are rebuilt.
+LOCATIONS_VERSION = "1"
 
 FIELDS = [
     "title", "company", "department", "location", "remote", "category", "job_type",
@@ -66,7 +83,7 @@ FIELDS = [
 ]
 
 LIST_COLUMNS = (
-    "id, source, title, company, department, location, remote, category, job_type, level, "
+    "id, source, title, company, department, location, location_display, remote, category, job_type, level, "
     "salary, tags, url, logo, posted_at, first_seen_at, substr(description, 1, 240) AS excerpt"
 )
 
@@ -83,10 +100,35 @@ def conn() -> sqlite3.Connection:
         _conn.execute("PRAGMA journal_mode=WAL")
         fresh_fts = _conn.execute("SELECT 1 FROM sqlite_master WHERE name='jobs_fts'").fetchone() is None
         _conn.executescript(SCHEMA)
+        cols = {r[1] for r in _conn.execute("PRAGMA table_info(jobs)")}
+        if "location_display" not in cols:
+            _conn.execute("ALTER TABLE jobs ADD COLUMN location_display TEXT")
+        ver = _conn.execute("SELECT value FROM meta WHERE key='locations_version'").fetchone()
+        if not ver or ver[0] != LOCATIONS_VERSION:
+            _rebuild_places(_conn)
         if fresh_fts:  # index jobs stored before full-text search existed
             _conn.execute("INSERT INTO jobs_fts(jobs_fts) VALUES ('rebuild')")
             _conn.commit()
     return _conn
+
+
+def _set_places(c: sqlite3.Connection, job_id: str, location: str | None, remote: bool) -> str:
+    places = locations.parse(location)
+    c.execute("UPDATE jobs SET location_display=? WHERE id=?", (locations.display(places, remote, location), job_id))
+    c.execute("DELETE FROM job_places WHERE job_id=?", (job_id,))
+    c.executemany(
+        "INSERT OR IGNORE INTO job_places (job_id, place, kind) VALUES (?,?,?)",
+        [(job_id, label, kind) for label, kind in locations.filter_entries(places, remote)],
+    )
+    return locations.display(places, remote, location)
+
+
+def _rebuild_places(c: sqlite3.Connection) -> None:
+    """Re-parse every stored job's location (first run, or after the parser improves)."""
+    for job_id, location, remote in c.execute("SELECT id, location, remote FROM jobs").fetchall():
+        _set_places(c, job_id, location, bool(remote))
+    c.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('locations_version', ?)", (LOCATIONS_VERSION,))
+    c.commit()
 
 
 def now_iso() -> str:
@@ -145,6 +187,9 @@ def upsert_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 )
                 existing.add(j["id"])
                 new.append({**j, "first_seen_at": seen})
+            new_display = _set_places(c, j["id"], j.get("location"), bool(j.get("remote")))
+            if new and new[-1]["id"] == j["id"]:
+                new[-1]["location_display"] = new_display
         c.commit()
     return new
 
@@ -180,10 +225,10 @@ def _build_where(filters: dict[str, Any]) -> tuple[str, list[Any]]:
         match = " AND ".join(f'"{t}"' for t in terms)
         where.append("rowid IN (SELECT rowid FROM jobs_fts WHERE jobs_fts MATCH ?)")
         args.append(match)
-    loc = (filters.get("location") or "").strip()
-    if loc:
-        where.append("location LIKE ?")
-        args.append(f"%{loc}%")
+    places = [v for v in (filters.get("place") or "").split("|") if v]
+    if places:
+        where.append(f"id IN (SELECT job_id FROM job_places WHERE place IN ({','.join('?' * len(places))}))")
+        args += places
     for key in MULTI_FILTERS:
         vals = [v for v in (filters.get(key) or "").split("|") if v]
         if vals:
@@ -244,10 +289,18 @@ def get(job_id: str) -> dict[str, Any] | None:
 def facets(filters: dict[str, Any]) -> dict[str, list[list[Any]]]:
     """Value counts for each filter, computed with all *other* filters applied."""
     out: dict[str, list[list[Any]]] = {}
-    limits = {"company": 400, "department": 300, "location": 300}
+    limits = {"company": 600}
     with _lock:
         c = conn()
-        for key in (*MULTI_FILTERS, "location"):
+        others = {k: v for k, v in filters.items() if k != "place"}
+        clause, args = _build_where(others)
+        rows = c.execute(
+            f"SELECT p.place, p.kind, COUNT(*) n FROM job_places p JOIN jobs ON jobs.id = p.job_id {clause} "
+            f"GROUP BY p.place, p.kind ORDER BY n DESC LIMIT 4000",
+            args,
+        ).fetchall()
+        out["place"] = [[r[0], r[2], r[1]] for r in rows]
+        for key in ("category", "job_type", "level", "company"):
             others = {k: v for k, v in filters.items() if k != key}
             clause, args = _build_where(others)
             extra = f"{'AND' if clause else 'WHERE'} {key} IS NOT NULL AND {key} != ''"

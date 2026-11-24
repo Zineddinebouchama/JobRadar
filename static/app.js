@@ -1,330 +1,380 @@
-/* JobRadar frontend — no framework, no build step. */
+/* PostedFresh frontend: plain JavaScript, no build step. */
 "use strict";
 
-// ------------------------------------------------------------------ utils
+// ------------------------------------------------------------------ helpers
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
-const fmtNum = (n) => Number(n || 0).toLocaleString();
+const num = (n) => Number(n || 0).toLocaleString();
+const fold = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
 const store = {
-  get(key, fallback) { try { const v = localStorage.getItem("jr:" + key); return v == null ? fallback : JSON.parse(v); } catch { return fallback; } },
-  set(key, value) { try { localStorage.setItem("jr:" + key, JSON.stringify(value)); } catch { /* storage unavailable */ } },
+  get(k, d) { try { const v = localStorage.getItem("pf:" + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("pf:" + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
 };
 
-function timeAgo(iso) {
+function ago(iso) {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return "just now";
+  if (s < 60) return "Just now";
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   if (s < 86400 * 30) return `${Math.floor(s / 86400)}d ago`;
-  return new Date(iso).toLocaleDateString();
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
-const isFresh = (iso, hours = 24) => Date.now() - new Date(iso).getTime() < hours * 3600e3;
+const isFresh = (iso) => Date.now() - new Date(iso).getTime() < 3 * 3600e3;
 
 function initials(name) {
   return (name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 }
-function logoHtml(job) {
-  const fallback = `<span>${esc(initials(job.company))}</span>`;
-  if (!job.logo) return `<div class="logo">${fallback}</div>`;
-  return `<div class="logo"><img src="${esc(job.logo)}" alt="" loading="lazy" onerror="this.parentNode.innerHTML='${esc(initials(job.company))}'"></div>`;
+function logo(job) {
+  const fb = esc(initials(job.company));
+  if (!job.logo) return `<div class="logo">${fb}</div>`;
+  return `<div class="logo"><img src="${esc(job.logo)}" alt="" loading="lazy" onerror="this.parentNode.textContent='${fb}'"></div>`;
 }
 
 function toast(title, body, onClick) {
   const el = document.createElement("div");
   el.className = "toast";
-  el.innerHTML = `<b>${esc(title)}</b>${esc(body || "")}`;
+  el.innerHTML = `<b>${esc(title)}</b>${body ? `<span>${esc(body)}</span>` : ""}`;
   el.onclick = () => { onClick && onClick(); el.remove(); };
   $("#toasts").appendChild(el);
-  setTimeout(() => el.remove(), 7000);
+  setTimeout(() => el.remove(), 6000);
 }
 
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
   if (!res.ok) {
     let msg = res.statusText;
-    try { msg = (await res.json()).detail || msg; } catch { /* not json */ }
+    try { const d = await res.json(); msg = typeof d.detail === "string" ? d.detail : msg; } catch { /* not json */ }
     throw new Error(msg);
   }
-  return res.json();
+  return res;
 }
+const getJSON = async (path, opts) => (await api(path, opts)).json();
+const jobPath = (id) => "/api/jobs/" + encodeURIComponent(id).replace(/%2F/g, "/");
 
 // ------------------------------------------------------------------ state
-const MULTI = ["job_type", "category", "level", "company", "department", "source"];
-const FACET_LABELS = { category: "Category", level: "Experience level", company: "Company", department: "Department", source: "Source" };
-const SOURCE_LABELS = { greenhouse: "Greenhouse", lever: "Lever", ashby: "Ashby", smartrecruiters: "SmartRecruiters", remotive: "Remotive", remoteok: "Remote OK", jobicy: "Jobicy", himalayas: "Himalayas", arbeitnow: "Arbeitnow" };
-const PAGE = 40;
+const MULTI = ["place", "job_type", "category", "level", "company"];
+const POSTED = [["0", "Any time"], ["1", "Past hour"], ["24", "Past 24 hours"], ["72", "Past 3 days"], ["168", "Past week"]];
+const REMOTE = [["any", "Any"], ["remote", "Remote"], ["onsite", "On-site or hybrid"]];
+const PAGE = 30;
+
+const blank = () => ({ q: "", place: [], job_type: [], category: [], level: [], company: [],
+  remote: "any", posted_within_hours: "0", salary_only: false, sort: "newest" });
 
 const state = {
-  filters: blankFilters(),
-  jobs: [],
-  total: 0,
-  facets: {},
-  selectedId: null,
-  selectedJob: null,
-  meta: null,
-  facetSearch: {},
-  pendingNew: [],
-  unseenCount: 0,
-  saved: store.get("saved", {}),
-  alerts: store.get("alerts", []),
-  alertHits: store.get("alertHits", []),
-  lastVisit: store.get("lastVisit", null),
+  f: blank(), jobs: [], total: 0, facets: {}, meta: null, metaAt: 0,
+  selectedId: null, selected: null, pending: [], unseen: 0,
+  saved: store.get("saved", {}), alerts: store.get("alerts", []),
+  lastVisit: store.get("lastVisit", null), letterJob: store.get("letterJob", null),
 };
 store.set("lastVisit", new Date().toISOString());
 
-function blankFilters() {
-  return { q: "", location: "", remote: "any", posted_within_hours: "0", sort: "newest", salary_only: false,
-    job_type: [], category: [], level: [], company: [], department: [], source: [] };
-}
-
-function filtersToParams(f) {
+function toParams(f) {
   const p = new URLSearchParams();
-  for (const [k, v] of Object.entries(f)) {
-    if (Array.isArray(v)) { if (v.length) p.set(k, v.join("|")); }
-    else if (k === "salary_only") { if (v) p.set(k, "true"); }
-    else if (v && !(k === "remote" && v === "any") && !(k === "posted_within_hours" && v === "0") && !(k === "sort" && v === "newest")) p.set(k, v);
-  }
+  if (f.q) p.set("q", f.q);
+  for (const k of MULTI) if (f[k].length) p.set(k, f[k].join("|"));
+  if (f.remote !== "any") p.set("remote", f.remote);
+  if (f.posted_within_hours !== "0") p.set("posted_within_hours", f.posted_within_hours);
+  if (f.salary_only) p.set("salary_only", "true");
+  if (f.sort !== "newest") p.set("sort", f.sort);
   return p;
 }
-function paramsToFilters(p) {
-  const f = blankFilters();
-  for (const k of Object.keys(f)) {
-    const v = p.get(k);
-    if (v == null) continue;
-    if (Array.isArray(f[k])) f[k] = v.split("|").filter(Boolean);
-    else if (k === "salary_only") f[k] = v === "true";
-    else f[k] = v;
-  }
+function fromParams(p) {
+  const f = blank();
+  if (p.get("q")) f.q = p.get("q");
+  for (const k of MULTI) if (p.get(k)) f[k] = p.get(k).split("|").filter(Boolean);
+  if (p.get("remote")) f.remote = p.get("remote");
+  if (p.get("posted_within_hours")) f.posted_within_hours = p.get("posted_within_hours");
+  f.salary_only = p.get("salary_only") === "true";
+  if (p.get("sort")) f.sort = p.get("sort");
   return f;
 }
+const activeCount = (f) => MULTI.reduce((n, k) => n + f[k].length, 0)
+  + (f.remote !== "any") + (f.posted_within_hours !== "0") + (f.salary_only ? 1 : 0);
 
 // ------------------------------------------------------------------ routing
-const VIEWS = ["jobs", "saved", "alerts", "sources"];
+const VIEWS = ["jobs", "saved", "letter", "about"];
 function route() {
   const [path, query] = location.hash.replace(/^#\/?/, "").split("?");
   const view = VIEWS.includes(path) ? path : "jobs";
   for (const v of VIEWS) $("#view-" + v).classList.toggle("hidden", v !== view);
   $$(".nav a").forEach((a) => a.classList.toggle("active", a.dataset.view === view));
-  if (view === "jobs" && query !== undefined) {
-    state.filters = paramsToFilters(new URLSearchParams(query));
-    syncFilterInputs();
-    loadJobs();
+  window.scrollTo(0, 0);
+  if (view === "jobs") {
+    const next = fromParams(new URLSearchParams(query || ""));
+    if (JSON.stringify(next) !== JSON.stringify(state.f) || !state.jobs.length) { state.f = next; syncInputs(); loadJobs(); }
   }
   if (view === "saved") renderSaved();
-  if (view === "alerts") renderAlerts();
-  if (view === "sources") renderSources();
+  if (view === "letter") renderLetterJob();
+  if (view === "about") renderSources();
 }
-function pushFilters() {
-  const qs = filtersToParams(state.filters).toString();
+function apply() {
+  const qs = toParams(state.f).toString();
   history.replaceState(null, "", "#/jobs" + (qs ? "?" + qs : ""));
   loadJobs();
 }
 
-// ------------------------------------------------------------------ jobs list
-let loadSeq = 0;
-async function loadJobs(append = false) {
-  const seq = ++loadSeq;
-  const p = filtersToParams(state.filters);
+// ------------------------------------------------------------------ jobs
+let seq = 0;
+async function loadJobs(more = false) {
+  const my = ++seq;
+  const p = toParams(state.f);
   p.set("limit", PAGE);
-  p.set("offset", append ? state.jobs.length : 0);
-  if (append) p.set("facets", "false");
-  if (!append) $("#result-count").innerHTML = `<span class="spinner"></span>`;
+  p.set("offset", more ? state.jobs.length : 0);
+  if (more) p.set("facets", "false");
+  if (!more) $("#count").innerHTML = `<span class="spinner"></span>`;
   try {
-    const data = await api("/api/jobs?" + p.toString());
-    if (seq !== loadSeq) return;
-    state.jobs = append ? state.jobs.concat(data.jobs) : data.jobs;
-    state.total = data.total;
-    if (data.facets) state.facets = data.facets;
-    if (!append) {
-      state.pendingNew = []; renderBanner(); $("#results").scrollTop = 0;
-      if (window.innerWidth <= 1180) { $("#detail").classList.remove("open"); state.selectedId = null; }
-    }
+    const d = await getJSON("/api/jobs?" + p);
+    if (my !== seq) return;
+    state.jobs = more ? state.jobs.concat(d.jobs) : d.jobs;
+    state.total = d.total;
+    if (d.facets) state.facets = d.facets;
     renderJobs();
-    if (!append) { renderFacets(); renderQuickTypes(); renderActiveFilters(); }
-    if (!append && !state.selectedId && state.jobs.length && window.innerWidth > 1180) selectJob(state.jobs[0].id);
+    if (!more) {
+      state.pending = []; renderBanner(); renderFilters(); renderActive();
+      if (window.innerWidth > 1180 && state.jobs.length && !state.jobs.some((j) => j.id === state.selectedId)) selectJob(state.jobs[0].id);
+      if (window.innerWidth <= 1180) closeDetail();
+    }
   } catch (e) {
-    $("#result-count").textContent = "Couldn't load jobs: " + e.message;
+    $("#count").textContent = "Couldn't load jobs. Is PostedFresh running?";
   }
 }
 
-function jobCard(job, flash = false) {
+function card(job, flash = false) {
   const saved = !!state.saved[job.id];
-  const isNew = state.lastVisit && job.first_seen_at > state.lastVisit;
-  const chips = [
-    isNew || isFresh(job.posted_at, 2) ? `<span class="chip new">NEW</span>` : "",
-    job.job_type && job.job_type !== "Full-time" ? `<span class="chip accent">${esc(job.job_type)}</span>` : `<span class="chip">${esc(job.job_type)}</span>`,
-    job.remote ? `<span class="chip green">Remote</span>` : "",
-    job.salary ? `<span class="chip green">${esc(job.salary)}</span>` : "",
-    job.level && job.level !== "Mid" && job.level !== "Internship" ? `<span class="chip">${esc(job.level)}</span>` : "",
+  const isNew = isFresh(job.posted_at) || (state.lastVisit && job.first_seen_at > state.lastVisit && isFresh(job.posted_at));
+  const tags = [
+    isNew ? `<span class="tag new">NEW</span>` : "",
+    `<span class="tag type">${esc(job.job_type)}</span>`,
+    job.salary ? `<span class="tag pay">${esc(job.salary)}</span>` : "",
   ].join("");
-  return `<article class="job ${job.id === state.selectedId ? "selected" : ""} ${flash ? "flash" : ""}" data-id="${esc(job.id)}">
-    ${logoHtml(job)}
-    <div>
+  return `<article class="job${job.id === state.selectedId ? " selected" : ""}${flash ? " flash" : ""}" data-id="${esc(job.id)}" tabindex="0">
+    ${logo(job)}
+    <div style="min-width:0">
       <h3 class="job-title">${esc(job.title)}</h3>
-      <div class="job-company">${esc(job.company)}${job.location ? " · " + esc(job.location) : ""}</div>
-      <div class="job-meta">${chips}</div>
-      <div class="job-foot"><span>${esc(timeAgo(job.posted_at))} · ${esc(job.department || job.category)}</span>
-        <button class="star ${saved ? "on" : ""}" data-star="${esc(job.id)}" title="${saved ? "Saved" : "Save"}">${saved ? "★" : "☆"}</button></div>
+      <div class="job-sub">${esc(job.company)} · ${esc(job.location_display || job.location || "")}</div>
+      <div class="job-tags">${tags}</div>
+    </div>
+    <div class="job-side">
+      <span class="job-time">${esc(ago(job.posted_at))}</span>
+      <button class="star${saved ? " on" : ""}" data-star="${esc(job.id)}" aria-label="${saved ? "Unsave job" : "Save job"}">${saved ? "★" : "☆"}</button>
     </div>
   </article>`;
 }
 
 function renderJobs() {
-  $("#result-count").innerHTML = `<b>${fmtNum(state.total)}</b> jobs`;
-  $("#job-list").innerHTML = state.jobs.length
-    ? state.jobs.map((j) => jobCard(j)).join("")
-    : `<div class="empty">No jobs match these filters yet.<br><span class="faint">New postings arrive every minute — or loosen a filter.</span></div>`;
+  $("#count").innerHTML = `<b>${num(state.total)}</b> jobs`;
+  $("#drawer-done").textContent = `Show ${num(state.total)} jobs`;
+  $("#job-list").innerHTML = state.jobs.length ? state.jobs.map((j) => card(j)).join("")
+    : `<div class="empty card"><b>No jobs match these filters</b>Try removing a filter. New jobs arrive every minute.</div>`;
   $("#load-more").classList.toggle("hidden", state.jobs.length >= state.total);
 }
 
-function renderQuickTypes() {
-  const counts = Object.fromEntries(state.facets.job_type || []);
-  const types = (state.meta?.job_types || ["Full-time", "Part-time", "Internship", "Apprenticeship", "Seasonal", "Temporary", "Contract"]);
-  const sel = state.filters.job_type;
-  $("#quick-types").innerHTML =
-    `<button class="qt ${sel.length ? "" : "on"}" data-qt="">All types</button>` +
-    types.map((t) => `<button class="qt ${sel.includes(t) ? "on" : ""}" data-qt="${esc(t)}">${esc(t)}<span class="n">${fmtNum(counts[t] || 0)}</span></button>`).join("");
+// ------------------------------------------------------------------ filters
+function summaryText(key) {
+  const f = state.f;
+  if (key === "place") return f.place.length === 1 ? f.place[0] : f.place.length ? `${f.place.length} places` : "";
+  if (key === "posted") return f.posted_within_hours !== "0" ? POSTED.find((p) => p[0] === f.posted_within_hours)?.[1] : "";
+  if (key === "remote") return f.remote !== "any" ? REMOTE.find((r) => r[0] === f.remote)?.[1] : "";
+  if (key === "salary_only") return f.salary_only ? "Listed" : "";
+  const v = f[key] || [];
+  return v.length === 1 ? v[0] : v.length ? `${v.length} selected` : "";
 }
 
-function renderFacets() {
-  const order = ["category", "level", "company", "department", "source"];
-  $("#facet-groups").innerHTML = order.map((key) => {
-    let rows = state.facets[key] || [];
-    if (key === "category") {
-      const all = state.meta?.categories || [];
-      const m = Object.fromEntries(rows);
-      rows = all.map((c) => [c, m[c] || 0]).sort((a, b) => b[1] - a[1]);
-    }
-    const selected = state.filters[key];
-    // Keep selected values visible even if they fell out of the top list.
-    for (const v of selected) if (!rows.some((r) => r[0] === v)) rows.unshift([v, 0]);
-    const searchable = key === "company" || key === "department";
-    const term = (state.facetSearch[key] || "").toLowerCase();
-    const shown = rows.filter(([v]) => !term || String(v).toLowerCase().includes(term));
-    return `<div class="filter-group" data-group="${key}">
-      <div class="head"><p class="label">${FACET_LABELS[key]}</p>${selected.length ? `<button class="btn small ghost" data-clear="${key}">Clear</button>` : ""}</div>
-      ${searchable ? `<input class="input filter-search" data-fsearch="${key}" placeholder="Search ${FACET_LABELS[key].toLowerCase()}s (${fmtNum(rows.length)})" value="${esc(state.facetSearch[key] || "")}">` : ""}
-      <div class="opts">${shown.slice(0, 200).map(([v, n]) => `
-        <label class="opt"><input type="checkbox" data-facet="${key}" value="${esc(v)}" ${selected.includes(v) ? "checked" : ""}>
-          <span class="name" title="${esc(v)}">${esc(key === "source" ? SOURCE_LABELS[v] || v : v)}</span><span class="n">${fmtNum(n)}</span></label>`).join("") || `<span class="faint" style="font-size:12.5px">No matches</span>`}
-      </div></div>`;
+function checkList(key, rows, all) {
+  const counts = Object.fromEntries(rows);
+  const values = all || rows.map((r) => r[0]);
+  for (const v of state.f[key]) if (!values.includes(v)) values.unshift(v);
+  return values.map((v) => {
+    const n = counts[v] || 0, on = state.f[key].includes(v);
+    return `<label class="opt${!n && !on ? " zero" : ""}"><input type="checkbox" data-f="${key}" value="${esc(v)}"${on ? " checked" : ""}>
+      <span class="name">${esc(v)}</span><span class="n">${num(n)}</span></label>`;
   }).join("");
-  const locs = state.facets.location || [];
-  $("#location-list").innerHTML = locs.slice(0, 200).map(([v]) => `<option value="${esc(v)}">`).join("");
+}
+function radioList(key, options, current) {
+  return options.map(([v, label]) => `<label class="opt"><input type="radio" name="${key}" data-r="${key}" value="${v}"${v === current ? " checked" : ""}>
+    <span class="name">${esc(label)}</span></label>`).join("");
 }
 
-function renderActiveFilters() {
-  const chips = [];
-  for (const k of MULTI) for (const v of state.filters[k]) chips.push([k, v, k === "source" ? SOURCE_LABELS[v] || v : v]);
-  if (state.filters.q) chips.push(["q", "", `“${state.filters.q}”`]);
-  if (state.filters.location) chips.push(["location", "", `📍 ${state.filters.location}`]);
-  if (state.filters.remote !== "any") chips.push(["remote", "", state.filters.remote === "remote" ? "Remote only" : "On-site / hybrid"]);
-  if (state.filters.posted_within_hours !== "0") chips.push(["posted_within_hours", "", $("#f-posted").selectedOptions[0]?.text || ""]);
-  if (state.filters.salary_only) chips.push(["salary_only", "", "Shows pay"]);
-  $("#active-filters").innerHTML = chips.map(([k, v, label]) => `<span class="chip" data-rm="${k}" data-v="${esc(v)}">${esc(label)} ✕</span>`).join("");
+function renderFilters() {
+  const F = state.facets, m = state.meta || {};
+  $("#posted-opts").innerHTML = radioList("posted_within_hours", POSTED, state.f.posted_within_hours);
+  $("#remote-opts").innerHTML = radioList("remote", REMOTE, state.f.remote);
+  $("#job_type-opts").innerHTML = checkList("job_type", F.job_type || [], [...(m.job_types || [])]);
+  const cats = Object.fromEntries(F.category || []);
+  $("#category-opts").innerHTML = checkList("category", F.category || [], [...(m.categories || [])].sort((a, b) => (cats[b] || 0) - (cats[a] || 0)));
+  $("#level-opts").innerHTML = checkList("level", F.level || [], [...(m.levels || [])]);
+  renderCompanies();
+  $("#salary-only").checked = state.f.salary_only;
+  renderPlaceChips();
+  for (const d of $$(".fgroup")) $(".sel", d).textContent = summaryText(d.dataset.group) || "";
+  const n = activeCount(state.f);
+  $("#clear-all").classList.toggle("hidden", !n);
+  $("#filter-count").textContent = n ? `(${n})` : "";
+}
+function renderCompanies() {
+  const term = fold($("#company-search").value);
+  const rows = (state.facets.company || []).filter(([c]) => !term || fold(c).includes(term));
+  const html = checkList("company", rows.slice(0, 150));
+  $("#company-opts").innerHTML = html || `<div class="combo-empty">No companies found</div>`;
 }
 
-function syncFilterInputs() {
-  const f = state.filters;
-  $("#f-q").value = f.q; $("#f-location").value = f.location; $("#f-remote").value = f.remote;
-  $("#f-posted").value = f.posted_within_hours; $("#f-sort").value = f.sort; $("#f-salary").checked = f.salary_only;
+function renderActive() {
+  const f = state.f, chips = [];
+  for (const k of MULTI) for (const v of f[k]) chips.push([k, v, v]);
+  if (f.posted_within_hours !== "0") chips.push(["posted_within_hours", "", summaryText("posted")]);
+  if (f.remote !== "any") chips.push(["remote", "", summaryText("remote")]);
+  if (f.salary_only) chips.push(["salary_only", "", "Lists pay"]);
+  $("#active-row").classList.toggle("hidden", !chips.length);
+  $("#active-row").innerHTML = chips.map(([k, v, label]) =>
+    `<button class="chip" data-rm="${k}" data-v="${esc(v)}">${esc(label)}<span class="x" aria-hidden="true">×</span><span class="sr-only">Remove filter</span></button>`).join("");
 }
 
-// ------------------------------------------------------------------ job detail
+function syncInputs() {
+  $("#q").value = state.f.q;
+  $("#sort").value = state.f.sort;
+}
+
+// ------------------------------------------------------------------ location combobox
+const KIND_LABEL = { country: "Countries", region: "States & regions", city: "Cities", area: "Regions" };
+let comboItems = [], comboActive = -1;
+
+function renderPlaceList() {
+  const input = $("#place-input"), list = $("#place-list");
+  const term = fold(input.value.trim());
+  const all = (state.facets.place || []).filter(([label]) => !state.f.place.includes(label));
+  let items;
+  if (!term) {
+    // Nothing typed yet: show the most common places of each kind.
+    items = [];
+    for (const kind of ["country", "region", "city", "area"]) items.push(...all.filter((p) => p[2] === kind).slice(0, kind === "area" ? 4 : 6));
+  } else {
+    items = all.filter(([label]) => fold(label).includes(term))
+      .sort((a, b) => (fold(a[0]).startsWith(term) ? 0 : 1) - (fold(b[0]).startsWith(term) ? 0 : 1) || b[1] - a[1])
+      .slice(0, 60);
+  }
+  comboItems = items;
+  comboActive = items.length ? 0 : -1;
+  if (!items.length) {
+    list.innerHTML = `<div class="combo-empty">${term ? "No matching places" : "Loading places…"}</div>`;
+  } else {
+    let html = "", last = "";
+    const ordered = term ? items : items;
+    ordered.forEach(([label, n, kind], i) => {
+      if (!term && kind !== last) { html += `<div class="combo-group">${KIND_LABEL[kind] || kind}</div>`; last = kind; }
+      const shown = term ? highlight(label, term) : esc(label);
+      html += `<div class="combo-item${i === comboActive ? " active" : ""}" role="option" data-i="${i}"><span class="name">${shown}</span><span class="n">${num(n)}</span></div>`;
+    });
+    list.innerHTML = html;
+  }
+  list.classList.remove("hidden");
+  input.setAttribute("aria-expanded", "true");
+}
+function highlight(label, term) {
+  const i = fold(label).indexOf(term);
+  if (i < 0) return esc(label);
+  return esc(label.slice(0, i)) + "<mark>" + esc(label.slice(i, i + term.length)) + "</mark>" + esc(label.slice(i + term.length));
+}
+function closeCombo() {
+  $("#place-list").classList.add("hidden");
+  $("#place-input").setAttribute("aria-expanded", "false");
+}
+function pickPlace(i) {
+  const item = comboItems[i];
+  if (!item) return;
+  state.f.place = [...state.f.place, item[0]];
+  $("#place-input").value = "";
+  closeCombo();
+  apply();
+}
+function renderPlaceChips() {
+  $("#place-chips").innerHTML = state.f.place.map((p) =>
+    `<button class="chip" data-rm="place" data-v="${esc(p)}">${esc(p)}<span class="x" aria-hidden="true">×</span></button>`).join("");
+}
+
+// ------------------------------------------------------------------ detail
 async function selectJob(id) {
   state.selectedId = id;
   $$(".job").forEach((el) => el.classList.toggle("selected", el.dataset.id === id));
+  const body = $("#detail-body");
   $("#detail").classList.add("open");
   $("#detail-empty").classList.add("hidden");
-  const inner = $("#detail-inner");
-  inner.classList.remove("hidden");
-  inner.innerHTML = `<div class="row muted"><span class="spinner"></span> Loading job…</div>`;
+  body.classList.remove("hidden");
+  body.innerHTML = `<div class="muted"><span class="spinner"></span> Loading…</div>`;
   try {
-    const job = await api("/api/jobs/" + encodeURIComponent(id).replace(/%2F/g, "/"));
+    const job = await getJSON(jobPath(id));
     if (state.selectedId !== id) return;
-    state.selectedJob = job;
-    inner.innerHTML = detailHtml(job);
+    state.selected = job;
+    body.innerHTML = detailHtml(job);
     $("#detail").scrollTop = 0;
   } catch (e) {
-    inner.innerHTML = `<div class="notice error">Couldn't load this job: ${esc(e.message)}</div>`;
+    body.innerHTML = `<div class="note err">${esc(e.message)}</div>`;
   }
 }
+function closeDetail() { $("#detail").classList.remove("open"); }
 
-function formatDescription(text) {
-  if (!text) return `<span class="faint">The source didn't include a description. Open the posting for full details.</span>`;
+function formatDesc(text) {
+  if (!text) return `<span class="muted">No description was provided. Open the job posting for full details.</span>`;
   return text.split("\n").map((line) => {
     const t = line.trim();
     if (!t) return "";
-    if (t.startsWith("• ")) return `<span class="bullet">• ${esc(t.slice(2))}</span>`;
-    if ((t.length < 70 && /:$/.test(t)) || (t.length < 60 && t === t.toUpperCase() && /[A-Z]/.test(t)))
-      return `<span class="sec">${esc(t)}</span>`;
+    if (t.startsWith("• ")) return `<span class="b">• ${esc(t.slice(2))}</span>`;
+    if ((t.length < 70 && /:$/.test(t)) || (t.length < 60 && t === t.toUpperCase() && /[A-Z]/.test(t))) return `<span class="h">${esc(t)}</span>`;
     return esc(t) + "\n";
   }).join("\n").replace(/\n{3,}/g, "\n\n");
 }
 
+const SOURCE_NAME = { greenhouse: "the company's careers page", lever: "the company's careers page", ashby: "the company's careers page",
+  smartrecruiters: "the company's careers page", remotive: "Remotive", remoteok: "Remote OK", jobicy: "Jobicy", himalayas: "Himalayas", arbeitnow: "Arbeitnow" };
+
 function detailHtml(job) {
   const saved = !!state.saved[job.id];
-  const posted = new Date(job.posted_at);
+  const posted = new Date(job.posted_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
   const cells = [
     ["Pay", job.salary || "Not listed", "pay"],
-    ["Location", job.location || "Not specified"],
-    ["Work arrangement", job.remote ? "Remote" : "On-site / hybrid"],
+    ["Location", job.location_display || job.location || "Not listed"],
     ["Job type", job.job_type],
-    ["Level", job.level],
-    ["Department", job.department || "—"],
-    ["Category", job.category],
-    ["Posted", `${posted.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })} · ${timeAgo(job.posted_at)}`],
-    ["Found via", SOURCE_LABELS[job.source] || job.source],
+    ["Experience", job.level],
+    ["Work setting", job.remote ? "Remote" : "On-site or hybrid"],
+    ["Posted", `${ago(job.posted_at)} · ${posted}`],
   ];
   const facts = (job.facts || []).map((f) => `<li><span class="k">${esc(f.label)}</span><span>${esc(f.value)}</span></li>`).join("");
-  const tags = (job.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join(" ");
   return `
-    <button class="btn small back-btn" data-close-detail>← Back to results</button>
-    <div class="detail-head">
-      ${logoHtml(job)}
-      <div style="flex:1;min-width:0">
-        <h1>${esc(job.title)}</h1>
-        <div class="company">${esc(job.company)}${job.location ? " · " + esc(job.location) : ""}</div>
-      </div>
-    </div>
-    <div class="detail-actions">
+    <button class="btn sm back" data-close>← Back to jobs</button>
+    <div class="d-head">${logo(job)}<div style="min-width:0"><h2 class="d-title">${esc(job.title)}</h2>
+      <div class="d-company">${esc(job.company)}${job.department ? " · " + esc(job.department) : ""}</div></div></div>
+    <div class="d-actions">
       <a class="btn primary" href="${esc(job.url)}" target="_blank" rel="noopener noreferrer">Apply on company site ↗</a>
       <button class="btn" data-star="${esc(job.id)}">${saved ? "★ Saved" : "☆ Save"}</button>
-      <button class="btn ghost" data-copy="${esc(job.url)}">Copy link</button>
+      <button class="btn" data-letter="${esc(job.id)}">Write cover letter</button>
     </div>
-    <p class="label">At a glance</p>
-    <div class="glance">${cells.map(([k, v, cls]) => `<div class="cell ${cls || ""}"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join("")}</div>
-    ${facts ? `<p class="label">From the posting</p><ul class="facts">${facts}</ul>` : ""}
-    ${tags ? `<div class="row" style="gap:5px;margin-bottom:18px">${tags}</div>` : ""}
-    <p class="label">Full description</p>
-    <div class="desc">${formatDescription(job.description)}</div>
-    <div class="detail-actions" style="margin-top:24px">
-      <a class="btn primary" href="${esc(job.url)}" target="_blank" rel="noopener noreferrer">Apply on company site ↗</a>
-    </div>`;
+    <div class="glance">${cells.map(([k, v, c]) => `<div class="cell ${c || ""}"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join("")}</div>
+    ${facts ? `<p class="section-title">Highlights</p><ul class="facts">${facts}</ul>` : ""}
+    <p class="section-title">About the job</p>
+    <div class="desc">${formatDesc(job.description)}</div>
+    <div class="d-foot">Found on ${esc(SOURCE_NAME[job.source] || job.source)}. Always confirm details on the employer's site.</div>`;
 }
 
-// ------------------------------------------------------------------ saved jobs
-const STATUSES = ["Saved", "Applied", "Interviewing", "Offer", "Rejected"];
-function briefOf(job) {
-  const keys = ["id", "title", "company", "location", "remote", "job_type", "level", "salary", "url", "logo", "posted_at", "category", "department"];
-  return Object.fromEntries(keys.map((k) => [k, job[k]]));
-}
+// ------------------------------------------------------------------ saved jobs + alerts
+const STATUSES = ["Saved", "Applied", "Interviewing", "Offer", "Not selected"];
+const brief = (j) => Object.fromEntries(["id", "title", "company", "location_display", "location", "job_type", "salary", "url", "logo", "posted_at", "category", "level", "remote"].map((k) => [k, j[k]]));
+
 function toggleSave(id) {
   if (state.saved[id]) delete state.saved[id];
   else {
-    const job = state.jobs.find((j) => j.id === id) || (state.selectedJob?.id === id ? state.selectedJob : null);
+    const job = state.jobs.find((j) => j.id === id) || (state.selected?.id === id ? state.selected : null);
     if (!job) return;
-    state.saved[id] = { job: briefOf(job), status: "Saved", savedAt: new Date().toISOString() };
+    state.saved[id] = { job: brief(job), status: "Saved", at: new Date().toISOString() };
+    toast("Saved", job.title);
   }
   store.set("saved", state.saved);
   renderSavedCount();
+  const on = !!state.saved[id];
   $$(`[data-star="${CSS.escape(id)}"]`).forEach((b) => {
-    const on = !!state.saved[id];
-    b.classList.toggle("on", on);
-    b.textContent = b.classList.contains("star") ? (on ? "★" : "☆") : (on ? "★ Saved" : "☆ Save");
+    if (b.classList.contains("star")) { b.classList.toggle("on", on); b.textContent = on ? "★" : "☆"; }
+    else b.textContent = on ? "★ Saved" : "☆ Save";
   });
   if (!$("#view-saved").classList.contains("hidden")) renderSaved();
 }
@@ -334,309 +384,365 @@ function renderSavedCount() {
   $("#saved-count").classList.toggle("hidden", !n);
 }
 function renderSaved() {
-  const items = Object.values(state.saved).sort((a, b) => b.savedAt.localeCompare(a.savedAt));
-  $("#pipeline").innerHTML = STATUSES.map((s) => `<div class="card"><div class="faint">${s}</div><div class="n">${items.filter((i) => i.status === s).length}</div></div>`).join("");
+  const items = Object.values(state.saved).sort((a, b) => b.at.localeCompare(a.at));
+  $("#pipeline").innerHTML = STATUSES.map((s) => `<div class="card"><div class="n">${items.filter((i) => i.status === s).length}</div><div class="l">${s}</div></div>`).join("");
   $("#saved-list").innerHTML = items.length ? items.map(({ job, status }) => `
     <div class="card saved-item">
-      ${logoHtml(job)}
-      <div style="min-width:0">
-        <div class="job-title">${esc(job.title)}</div>
-        <div class="job-company">${esc(job.company)}${job.location ? " · " + esc(job.location) : ""}${job.salary ? " · " + esc(job.salary) : ""}</div>
-      </div>
+      ${logo(job)}
+      <div style="min-width:0"><div class="job-title">${esc(job.title)}</div>
+        <div class="job-sub">${esc(job.company)} · ${esc(job.location_display || job.location || "")}${job.salary ? " · " + esc(job.salary) : ""}</div></div>
       <div class="row">
-        <select class="input" style="width:auto" data-status="${esc(job.id)}">${STATUSES.map((s) => `<option ${s === status ? "selected" : ""}>${s}</option>`).join("")}</select>
-        <a class="btn small" href="${esc(job.url)}" target="_blank" rel="noopener noreferrer">Open ↗</a>
-        <button class="btn small ghost" data-star="${esc(job.id)}" title="Remove">✕</button>
+        <select class="input" data-status="${esc(job.id)}" aria-label="Application status">${STATUSES.map((s) => `<option${s === status ? " selected" : ""}>${s}</option>`).join("")}</select>
+        <a class="btn sm" href="${esc(job.url)}" target="_blank" rel="noopener noreferrer">Open ↗</a>
+        <button class="btn sm ghost" data-star="${esc(job.id)}" aria-label="Remove">Remove</button>
       </div>
-    </div>`).join("") : `<div class="empty">No saved jobs yet. Press ☆ on any job to keep it here.</div>`;
+    </div>`).join("") : `<div class="empty card"><b>No saved jobs yet</b>Press ☆ on any job to keep track of it here.</div>`;
+  renderAlerts();
 }
 
-// ------------------------------------------------------------------ matching (alerts + live banner)
-function matchesFilters(job, f) {
-  const hay = `${job.title} ${job.company} ${job.department || ""} ${job.category}`.toLowerCase();
-  if (f.q && !f.q.toLowerCase().split(/\s+/).every((t) => hay.includes(t))) return false;
-  if (f.location && !(job.location || "").toLowerCase().includes(f.location.toLowerCase())) return false;
+function matches(job, f) {
+  const hay = fold(`${job.title} ${job.company} ${job.category}`);
+  if (f.q && !fold(f.q).split(/\s+/).every((t) => hay.includes(t))) return false;
+  if (f.locText && !fold(job.location_display || job.location || "").includes(fold(f.locText))) return false;
+  if (f.place?.length && !f.place.some((p) => fold(job.location_display || "").includes(fold(p.split(",")[0])))) return false;
   if (f.remote === "remote" && !job.remote) return false;
   if (f.remote === "onsite" && job.remote) return false;
   if (f.salary_only && !job.salary) return false;
-  for (const k of MULTI) if (f[k]?.length && !f[k].includes(job[k])) return false;
+  for (const k of ["job_type", "category", "level", "company"]) if (f[k]?.length && !f[k].includes(job[k])) return false;
   return true;
 }
-
-// ------------------------------------------------------------------ alerts
-function renderAlerts() {
-  const sel = (id, opts, label) => { $(id).innerHTML = `<option value="">${label}</option>` + opts.map((o) => `<option>${esc(o)}</option>`).join(""); };
-  sel("#a-type", state.meta?.job_types || [], "Any job type");
-  sel("#a-cat", state.meta?.categories || [], "Any category");
-  $("#notify-btn").textContent = !("Notification" in window) ? "Notifications not supported"
-    : Notification.permission === "granted" ? "✓ Desktop notifications on" : "Enable desktop notifications";
-  $("#alert-list").innerHTML = state.alerts.length ? state.alerts.map((a, i) => `
-    <div class="card" style="padding:12px 14px">
-      <div class="row between">
-        <div><b>${esc(a.name)}</b><div class="faint" style="font-size:12.5px">${a.hits || 0} matches so far</div></div>
-        <div class="row"><button class="btn small" data-alert-view="${i}">View jobs</button><button class="btn small ghost" data-alert-rm="${i}">Delete</button></div>
-      </div>
-    </div>`).join("") : `<div class="card empty" style="padding:30px">No alerts yet. Create one, or press “🔔 Alert me” on the Jobs page to save your current filters.</div>`;
-  $("#alert-hits").innerHTML = state.alertHits.length ? state.alertHits.slice(0, 30).map((h) => `
-    <div class="row between" style="font-size:13px;border-bottom:1px solid var(--border);padding-bottom:6px">
-      <a href="#/jobs" data-open-job="${esc(h.id)}">${esc(h.title)} · ${esc(h.company)}</a><span class="faint">${esc(h.alert)} · ${timeAgo(h.at)}</span>
-    </div>`).join("") : `<span class="faint">Matches show up here as jobs are posted.</span>`;
-}
 function alertName(f) {
-  const parts = [f.q && `“${f.q}”`, ...f.job_type, ...f.category, f.location && `in ${f.location}`, f.remote === "remote" && "remote"].filter(Boolean);
+  const parts = [f.q && `"${f.q}"`, ...(f.job_type || []), ...(f.category || []), ...(f.place || []), f.locText, f.remote === "remote" && "Remote"].filter(Boolean);
   return parts.join(" · ") || "All new jobs";
 }
-function addAlert(filters) {
-  const f = { ...blankFilters(), ...filters };
-  state.alerts.push({ name: alertName(f), filters: f, hits: 0, created: new Date().toISOString() });
+function addAlert(f) {
+  state.alerts.push({ name: alertName(f), f, hits: 0 });
   store.set("alerts", state.alerts);
-  askNotify();
-  toast("Alert created", alertName(f));
+  toast("Alert created", "You'll be notified when a matching job is posted.");
+  if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().then(renderAlerts);
+  renderAlerts();
 }
-function askNotify() {
-  if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().then(() => renderAlerts());
+function renderAlerts() {
+  const perm = "Notification" in window ? Notification.permission : "unsupported";
+  const note = $("#notify-note");
+  note.classList.toggle("hidden", !state.alerts.length);
+  note.innerHTML = perm === "granted" ? "Desktop notifications are on. Keep PostedFresh open in a tab to receive them."
+    : perm === "unsupported" ? "This browser doesn't support notifications; matches will appear as pop-ups on the page."
+    : `Turn on desktop notifications to hear about matches right away. <button class="link-btn" id="notify-btn">Turn on</button>`;
+  $("#alert-list").innerHTML = state.alerts.length ? state.alerts.map((a, i) => `
+    <div class="card alert-item"><div><b>${esc(a.name)}</b><div class="muted" style="font-size:12.5px">${a.hits || 0} matches so far</div></div>
+      <div class="row" style="display:flex;gap:6px"><button class="btn sm" data-alert-view="${i}">View jobs</button><button class="btn sm ghost" data-alert-rm="${i}">Delete</button></div></div>`).join("")
+    : `<div class="empty card"><b>No alerts yet</b>Create one above, or press <b>Alert me</b> on the Jobs page.</div>`;
 }
 
-// ------------------------------------------------------------------ live updates (SSE)
-let lastEventAt = null;
-function connectStream() {
+// ------------------------------------------------------------------ live updates
+function connect() {
   const es = new EventSource("/api/stream");
   es.onopen = () => setLive(true);
   es.onerror = () => setLive(false);
   es.onmessage = (ev) => {
-    lastEventAt = Date.now();
     const msg = JSON.parse(ev.data);
-    if (msg.type === "hello" && msg.stats) renderStats(msg.stats);
-    if (msg.type === "new_jobs") onNewJobs(msg);
+    if (msg.type === "new_jobs") onNewJobs(msg.jobs || []);
   };
 }
 function setLive(on) {
   $("#live").classList.toggle("on", on);
   $("#live").classList.toggle("off", !on);
-  updateLiveText();
+  liveText();
 }
-function updateLiveText() {
+function liveText() {
   if (!$("#live").classList.contains("on")) { $("#live-text").textContent = "Reconnecting…"; return; }
   const runs = (state.meta?.sources || []).map((s) => s.last_run).filter(Boolean);
-  const last = runs.length ? Math.max(...runs) * 1000 : null;
-  const offset = state.meta ? Date.now() - state.meta.server_time * 1000 - (Date.now() - state.metaFetchedAt) : 0;
-  const ago = last ? Math.max(0, Math.round((Date.now() - offset - last) / 1000)) : null;
-  $("#live-text").textContent = ago == null ? "Live" : `Live · checked ${ago < 60 ? ago + "s" : Math.round(ago / 60) + "m"} ago`;
+  if (!runs.length) { $("#live-text").textContent = "Live"; return; }
+  const serverNow = state.meta.server_time + (Date.now() - state.metaAt) / 1000;
+  const s = Math.max(0, Math.round(serverNow - Math.max(...runs)));
+  $("#live-text").textContent = `Live · updated ${s < 60 ? s + "s" : Math.round(s / 60) + "m"} ago`;
 }
-
-function onNewJobs(msg) {
-  const jobs = msg.jobs || [];
-  if (state.meta) { state.meta.stats.total += msg.count; renderStats(state.meta.stats); }
-  // Alerts
-  for (const job of jobs) {
-    for (const a of state.alerts) {
-      if (!matchesFilters(job, a.filters)) continue;
-      a.hits = (a.hits || 0) + 1;
-      state.alertHits.unshift({ id: job.id, title: job.title, company: job.company, alert: a.name, at: new Date().toISOString() });
-      notify(job, a);
+function onNewJobs(jobs) {
+  for (const job of jobs) for (const a of state.alerts) {
+    if (!matches(job, a.f)) continue;
+    a.hits = (a.hits || 0) + 1;
+    const body = `${job.company} · ${job.location_display || job.location || ""}`;
+    toast(`New: ${job.title}`, body, () => openJob(job.id));
+    if ("Notification" in window && Notification.permission === "granted") {
+      const n = new Notification(`New job: ${job.title}`, { body, tag: job.id });
+      n.onclick = () => { window.focus(); openJob(job.id); n.close(); };
     }
   }
-  state.alertHits = state.alertHits.slice(0, 100);
   store.set("alerts", state.alerts);
-  store.set("alertHits", state.alertHits);
+  if (state.meta) { state.meta.stats.total += jobs.length; renderMeta(); }
 
-  // Live list
-  const matching = jobs.filter((j) => matchesFilters(j, state.filters) && !state.jobs.some((x) => x.id === j.id));
-  if (!matching.length) return;
-  const atTop = $("#results").scrollTop < 40 && ["newest", "discovered"].includes(state.filters.sort);
-  const onJobs = !$("#view-jobs").classList.contains("hidden");
-  if (atTop && onJobs && document.visibilityState === "visible") {
-    insertJobs(matching);
-  } else {
-    state.pendingNew = matching.concat(state.pendingNew).slice(0, 200);
-    renderBanner();
+  const fresh = jobs.filter((j) => !state.jobs.some((x) => x.id === j.id) && serverMatches(j));
+  if (!fresh.length) return;
+  const atTop = window.scrollY < 120 && state.f.sort === "newest" && !$("#view-jobs").classList.contains("hidden");
+  if (atTop && document.visibilityState === "visible") insertJobs(fresh);
+  else { state.pending = fresh.concat(state.pending).slice(0, 200); renderBanner(); }
+  if (document.visibilityState !== "visible") { state.unseen += fresh.length; document.title = `(${state.unseen}) PostedFresh`; }
+}
+// Client-side check of a pushed job against the current filters.
+function serverMatches(job) {
+  const f = state.f;
+  if (f.place.length) {
+    const loc = fold(job.location_display || "");
+    if (!f.place.some((p) => loc.includes(fold(p.split(",")[0])))) return false;
   }
-  if (document.visibilityState !== "visible") {
-    state.unseenCount += matching.length;
-    document.title = `(${state.unseenCount}) JobRadar`;
-  }
+  if (f.posted_within_hours !== "0") { /* new jobs are always within range */ }
+  return matches(job, { ...f, place: [] });
 }
 function insertJobs(jobs) {
   state.jobs = jobs.concat(state.jobs);
   state.total += jobs.length;
-  const html = jobs.map((j) => jobCard(j, true)).join("");
-  const list = $("#job-list");
-  if (list.querySelector(".empty")) list.innerHTML = "";
-  list.insertAdjacentHTML("afterbegin", html);
-  $("#result-count").innerHTML = `<b>${fmtNum(state.total)}</b> jobs · <span style="color:var(--green)">${jobs.length} just posted</span>`;
+  if ($(".job-list .empty")) $("#job-list").innerHTML = "";
+  $("#job-list").insertAdjacentHTML("afterbegin", jobs.map((j) => card(j, true)).join(""));
+  $("#count").innerHTML = `<b>${num(state.total)}</b> jobs · <span style="color:var(--brand-ink)">${jobs.length} just posted</span>`;
 }
 function renderBanner() {
-  const n = state.pendingNew.length;
-  const b = $("#new-banner");
-  b.classList.toggle("hidden", !n);
-  if (n) b.innerHTML = `↑ ${n} new job${n > 1 ? "s" : ""} just posted. Show ${n > 1 ? "them" : "it"}`;
-}
-function notify(job, alert) {
-  const body = `${job.company}${job.location ? " · " + job.location : ""}${job.salary ? " · " + job.salary : ""}`;
-  toast(`New: ${job.title}`, `${body}. Matches “${alert.name}”`, () => openJob(job.id));
-  if ("Notification" in window && Notification.permission === "granted") {
-    const n = new Notification(`New job: ${job.title}`, { body: `${body}\nAlert: ${alert.name}`, tag: job.id });
-    n.onclick = () => { window.focus(); openJob(job.id); n.close(); };
-  }
+  const n = state.pending.length;
+  $("#new-banner").classList.toggle("hidden", !n);
+  if (n) $("#new-banner").textContent = `↑ ${n} new job${n > 1 ? "s" : ""} posted. Show ${n > 1 ? "them" : "it"}`;
 }
 function openJob(id) {
-  if (location.hash.startsWith("#/jobs") === false) location.hash = "#/jobs";
-  setTimeout(() => selectJob(id), 50);
+  if (!location.hash.startsWith("#/jobs")) location.hash = "#/jobs";
+  setTimeout(() => selectJob(id), 60);
 }
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") { state.unseenCount = 0; document.title = "JobRadar"; }
+  if (document.visibilityState === "visible") { state.unseen = 0; document.title = "PostedFresh: jobs the minute they're posted"; }
 });
 
-// ------------------------------------------------------------------ meta / stats / sources
+// ------------------------------------------------------------------ meta + about
 async function loadMeta() {
   try {
-    state.meta = await api("/api/meta");
-    state.metaFetchedAt = Date.now();
-    renderStats(state.meta.stats);
-    updateLiveText();
-    if (!$("#view-sources").classList.contains("hidden")) renderSources();
+    state.meta = await getJSON("/api/meta");
+    state.metaAt = Date.now();
+    renderMeta();
+    if (!$("#view-about").classList.contains("hidden")) renderSources();
   } catch { /* server restarting */ }
 }
-function renderStats(s) {
-  $("#stats").innerHTML = `<b>${fmtNum(s.total)}</b> jobs · <b>${fmtNum(s.companies)}</b> companies · <b>${fmtNum(s.last_24h)}</b> posted today`;
+function renderMeta() {
+  const s = state.meta?.stats;
+  if (s) $("#search-meta").innerHTML = `<b>${num(s.total)}</b> open jobs · <b>${num(s.last_24h)}</b> posted today`;
+  liveText();
+  if (!state.facets.job_type) return;
+  renderFilters();
 }
 function renderSources() {
   const rows = state.meta?.sources || [];
-  const serverNow = state.meta ? state.meta.server_time + (Date.now() - state.metaFetchedAt) / 1000 : Date.now() / 1000;
-  const ago = (t) => (t ? `${Math.max(0, Math.round(serverNow - t))}s ago` : "—");
-  $("#sources-table").innerHTML = `<tr><th>Source</th><th>Type</th><th>Boards</th><th>Check every</th><th>Last check</th><th>Live jobs</th><th>New last check</th><th>Status</th></tr>` +
-    rows.map((s) => `<tr>
-      <td><b>${esc(s.label)}</b></td><td>${esc(s.kind)}</td><td class="num">${s.boards ?? "—"}</td>
-      <td class="num">${s.interval < 120 ? s.interval + "s" : s.interval / 60 + " min"}</td>
-      <td class="num">${ago(s.last_run)}</td><td class="num">${fmtNum(s.count)}</td><td class="num">${fmtNum(s.new_last_run)}</td>
-      <td>${s.error ? `<span class="chip red" title="${esc(s.error)}">Error</span>` : s.last_ok ? `<span class="chip green">OK</span>` : `<span class="chip">Starting</span>`}</td></tr>`).join("");
+  const serverNow = state.meta ? state.meta.server_time + (Date.now() - state.metaAt) / 1000 : Date.now() / 1000;
+  $("#sources-table").innerHTML = `<tr><th>Source</th><th>Type</th><th>Checked every</th><th>Last check</th><th>Open jobs</th><th>Status</th></tr>` +
+    rows.map((s) => `<tr><td><b>${esc(s.label)}</b>${s.boards ? ` <span class="muted">(${s.boards} companies)</span>` : ""}</td><td>${esc(s.kind)}</td>
+      <td>${s.interval < 120 ? s.interval + " seconds" : s.interval / 60 + " minutes"}</td>
+      <td>${s.last_run ? Math.max(0, Math.round(serverNow - s.last_run)) + "s ago" : "-"}</td><td>${num(s.count)}</td>
+      <td>${s.error ? `<span class="ok-dot err-dot"></span>Error` : s.last_ok ? `<span class="ok-dot"></span>OK` : "Starting"}</td></tr>`).join("");
+}
+
+// ------------------------------------------------------------------ cover letter
+function renderLetterJob() {
+  const j = state.letterJob;
+  $("#picked").innerHTML = j ? `<div class="picked">${logo(j)}<div style="flex:1;min-width:0"><b>${esc(j.title)}</b>
+    <div class="muted" style="font-size:12.5px">${esc(j.company)}</div></div><button class="btn sm ghost" id="unpick" aria-label="Clear job">×</button></div>` : "";
+  if (j) {
+    $("#jd-title").value = j.title || "";
+    $("#jd-company").value = j.company || "";
+    $("#jd-text").value = j.description || "";
+  }
+}
+async function startLetter(id) {
+  let job = state.selected?.id === id ? state.selected : null;
+  if (!job) { try { job = await getJSON(jobPath(id)); } catch (e) { toast("Couldn't load job", e.message); return; } }
+  state.letterJob = { ...brief(job), description: job.description };
+  store.set("letterJob", state.letterJob);
+  location.hash = "#/letter";
+}
+function letterNote() {
+  const text = $("#letter").value;
+  const placeholders = text.match(/\[[^\]]{4,}\]/g) || [];
+  $("#letter-note").innerHTML = placeholders.length
+    ? `<div class="note warn">Personalize ${placeholders.length === 1 ? "the sentence" : "the sentences"} in [brackets] before downloading. Click into the letter to edit it.</div>`
+    : "";
+}
+async function makeLetter() {
+  const resume = $("#resume").value.trim();
+  const note = $("#letter-note");
+  if (resume.length < 30) { note.innerHTML = `<div class="note err">Add your resume first (paste it or upload a file).</div>`; return; }
+  if (!$("#jd-title").value.trim() || !$("#jd-company").value.trim()) {
+    note.innerHTML = `<div class="note err">Add the job title and company, or open a job and press <b>Write cover letter</b>.</div>`; return;
+  }
+  const btn = $("#make-letter");
+  btn.disabled = true; btn.innerHTML = `<span class="spinner"></span> Writing…`;
+  try {
+    const sameJob = state.letterJob && state.letterJob.title === $("#jd-title").value;
+    const d = await getJSON("/api/cover-letter", { method: "POST", body: JSON.stringify({
+      resume, job_id: sameJob ? state.letterJob.id : null, job_title: $("#jd-title").value,
+      company: $("#jd-company").value, job_description: $("#jd-text").value,
+    }) });
+    $("#paper-empty").classList.add("hidden");
+    $("#letter").classList.remove("hidden");
+    $("#letter").value = d.letter;
+    $("#letter-bar").classList.remove("hidden");
+    $("#skills-line").innerHTML = d.matched.length ? `Matched skills: ${d.matched.map(esc).join(", ")}` : "";
+    letterNote();
+    if (window.innerWidth <= 1180) $("#paper").scrollIntoView({ behavior: "smooth" });
+  } catch (e) {
+    note.innerHTML = `<div class="note err">${esc(e.message)}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = "Create cover letter";
+  }
+}
+async function downloadPdf() {
+  const text = $("#letter").value;
+  if (/\[[^\]]{4,}\]/.test(text) && !confirm("Your letter still has text in [brackets] to personalize. Download anyway?")) return;
+  const company = ($("#jd-company").value || "company").replace(/[^\w-]+/g, "-");
+  const name = `Cover-Letter-${company}`;
+  try {
+    const res = await api("/api/cover-letter/pdf", { method: "POST", body: JSON.stringify({ text, filename: name }) });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(await res.blob());
+    a.download = name + ".pdf";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  } catch (e) { toast("Couldn't create the PDF", e.message); }
+}
+async function uploadResume(file) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const drop = $("#drop"), before = drop.innerHTML;
+  drop.innerHTML = `<span class="spinner"></span> Reading ${esc(file.name)}…`;
+  try {
+    const res = await fetch("/api/resume/parse", { method: "POST", body: fd });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.detail || res.statusText);
+    $("#resume").value = d.text;
+    store.set("resume", d.text);
+    toast("Resume added", file.name);
+  } catch (e) { toast("Couldn't read that file", e.message); }
+  finally { drop.innerHTML = before; }
 }
 
 // ------------------------------------------------------------------ events
 function bind() {
   window.addEventListener("hashchange", route);
-  const setF = (k, v) => { state.filters[k] = v; pushFilters(); };
-  $("#f-q").addEventListener("input", debounce((e) => {
+
+  $("#q").addEventListener("input", debounce((e) => {
     const q = e.target.value.trim();
-    // Searching? Rank by match quality; cleared? go back to newest first.
-    if (q && state.filters.sort === "newest") { state.filters.sort = "relevance"; $("#f-sort").value = "relevance"; }
-    if (!q && state.filters.sort === "relevance") { state.filters.sort = "newest"; $("#f-sort").value = "newest"; }
-    setF("q", q);
+    if (q && state.f.sort === "newest") state.f.sort = "relevance";
+    if (!q && state.f.sort === "relevance") state.f.sort = "newest";
+    $("#sort").value = state.f.sort;
+    state.f.q = q; apply();
   }, 300));
-  $("#f-location").addEventListener("input", debounce((e) => setF("location", e.target.value.trim()), 400));
-  $("#f-remote").addEventListener("change", (e) => setF("remote", e.target.value));
-  $("#f-posted").addEventListener("change", (e) => setF("posted_within_hours", e.target.value));
-  $("#f-sort").addEventListener("change", (e) => setF("sort", e.target.value));
-  $("#f-salary").addEventListener("change", (e) => setF("salary_only", e.target.checked));
-  $("#clear-filters").onclick = () => { state.filters = blankFilters(); state.facetSearch = {}; syncFilterInputs(); pushFilters(); };
-  $("#toggle-filters").onclick = () => $("#filters").classList.toggle("open");
+  $("#sort").addEventListener("change", (e) => { state.f.sort = e.target.value; apply(); });
   $("#load-more").onclick = () => loadJobs(true);
-  $("#save-alert-btn").onclick = () => addAlert(JSON.parse(JSON.stringify(state.filters)));
-  $("#new-banner").onclick = () => { const jobs = state.pendingNew; state.pendingNew = []; renderBanner(); $("#results").scrollTop = 0; insertJobs(jobs); };
+  $("#clear-all").onclick = () => { const q = state.f.q, sort = state.f.sort; state.f = { ...blank(), q, sort }; $("#company-search").value = ""; apply(); };
+  $("#alert-btn").onclick = () => addAlert(JSON.parse(JSON.stringify(state.f)));
+  $("#new-banner").onclick = () => { const j = state.pending; state.pending = []; renderBanner(); window.scrollTo({ top: 0 }); insertJobs(j); };
+  $("#salary-only").onchange = (e) => { state.f.salary_only = e.target.checked; apply(); };
+  $("#company-search").addEventListener("input", renderCompanies);
 
-  $("#quick-types").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-qt]"); if (!b) return;
-    const t = b.dataset.qt, sel = state.filters.job_type;
-    state.filters.job_type = !t ? [] : sel.includes(t) ? sel.filter((x) => x !== t) : [...sel, t];
-    pushFilters();
+  // Filter checkboxes and radios
+  $("#filters").addEventListener("change", (e) => {
+    const cb = e.target.closest("[data-f]");
+    if (cb) { const k = cb.dataset.f; state.f[k] = cb.checked ? [...state.f[k], cb.value] : state.f[k].filter((v) => v !== cb.value); apply(); }
+    const r = e.target.closest("[data-r]");
+    if (r) { state.f[r.dataset.r] = r.value; apply(); }
   });
-  $("#facet-groups").addEventListener("change", (e) => {
-    const cb = e.target.closest("[data-facet]"); if (!cb) return;
-    const k = cb.dataset.facet, v = cb.value;
-    state.filters[k] = cb.checked ? [...state.filters[k], v] : state.filters[k].filter((x) => x !== v);
-    pushFilters();
-  });
-  $("#facet-groups").addEventListener("input", (e) => {
-    const inp = e.target.closest("[data-fsearch]"); if (!inp) return;
-    state.facetSearch[inp.dataset.fsearch] = inp.value;
-    const pos = inp.selectionStart; renderFacets();
-    const again = $(`[data-fsearch="${inp.dataset.fsearch}"]`); again.focus(); again.setSelectionRange(pos, pos);
-  });
-  $("#facet-groups").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-clear]"); if (!b) return;
-    state.filters[b.dataset.clear] = []; pushFilters();
-  });
-  $("#active-filters").addEventListener("click", (e) => {
-    const c = e.target.closest("[data-rm]"); if (!c) return;
+  // Remove-filter chips (sidebar and above results)
+  document.addEventListener("click", (e) => {
+    const c = e.target.closest("[data-rm]");
+    if (!c) return;
     const k = c.dataset.rm, v = c.dataset.v;
-    if (MULTI.includes(k)) state.filters[k] = state.filters[k].filter((x) => x !== v);
-    else state.filters[k] = blankFilters()[k];
-    syncFilterInputs(); pushFilters();
+    if (MULTI.includes(k)) state.f[k] = state.f[k].filter((x) => x !== v);
+    else state.f[k] = blank()[k];
+    apply();
   });
 
+  // Location combobox
+  const pin = $("#place-input");
+  pin.addEventListener("focus", renderPlaceList);
+  pin.addEventListener("input", renderPlaceList);
+  pin.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if ($("#place-list").classList.contains("hidden")) renderPlaceList();
+      comboActive = Math.max(0, Math.min(comboItems.length - 1, comboActive + (e.key === "ArrowDown" ? 1 : -1)));
+      $$(".combo-item").forEach((el) => el.classList.toggle("active", +el.dataset.i === comboActive));
+      $(`.combo-item[data-i="${comboActive}"]`)?.scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter") { e.preventDefault(); pickPlace(comboActive); }
+    else if (e.key === "Escape") closeCombo();
+  });
+  $("#place-list").addEventListener("mousedown", (e) => { const it = e.target.closest(".combo-item"); if (it) { e.preventDefault(); pickPlace(+it.dataset.i); } });
+  pin.addEventListener("blur", () => setTimeout(closeCombo, 120));
+
+  // Mobile filter drawer
+  const toggleFilters = (open) => { $("#filters").classList.toggle("open", open); $("#scrim").classList.toggle("open", open); };
+  $("#filter-toggle").onclick = () => toggleFilters(true);
+  $("#scrim").onclick = () => toggleFilters(false);
+  $("#drawer-done").onclick = () => toggleFilters(false);
+
+  // Clicks on jobs, stars, detail buttons
   document.addEventListener("click", (e) => {
     const star = e.target.closest("[data-star]");
     if (star) { e.stopPropagation(); toggleSave(star.dataset.star); return; }
-    const cp = e.target.closest("[data-copy]");
-    if (cp) { navigator.clipboard.writeText(cp.dataset.copy).then(() => toast("Link copied", "")); return; }
-    if (e.target.closest("[data-close-detail]")) { $("#detail").classList.remove("open"); return; }
-    const oj = e.target.closest("[data-open-job]");
-    if (oj) { e.preventDefault(); openJob(oj.dataset.openJob); return; }
-    const card = e.target.closest(".job");
-    if (card) selectJob(card.dataset.id);
+    const lt = e.target.closest("[data-letter]");
+    if (lt) { startLetter(lt.dataset.letter); return; }
+    if (e.target.closest("[data-close]")) { closeDetail(); return; }
+    const job = e.target.closest(".job");
+    if (job) selectJob(job.dataset.id);
   });
+  $("#job-list").addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.classList.contains("job")) selectJob(e.target.dataset.id); });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") $("#detail").classList.remove("open");
-    if ($("#view-jobs").classList.contains("hidden") || /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
-    if (e.key === "j" || e.key === "k") {
-      const i = state.jobs.findIndex((j) => j.id === state.selectedId);
-      const next = state.jobs[Math.min(state.jobs.length - 1, Math.max(0, i + (e.key === "j" ? 1 : -1)))];
-      if (next) { selectJob(next.id); $(`.job[data-id="${CSS.escape(next.id)}"]`)?.scrollIntoView({ block: "nearest" }); }
-    }
-    if (e.key === "/") { e.preventDefault(); $("#f-q").focus(); }
+    if (e.key === "Escape") { closeDetail(); $("#filters").classList.remove("open"); $("#scrim").classList.remove("open"); }
+    if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && !$("#view-jobs").classList.contains("hidden")) { e.preventDefault(); $("#q").focus(); }
   });
 
-  // Saved
+  // Saved + alerts
+  $$(".tabs .tab").forEach((t) => t.onclick = () => {
+    $$(".tabs .tab").forEach((x) => x.classList.toggle("on", x === t));
+    $("#tab-jobs").classList.toggle("hidden", t.dataset.tab !== "jobs");
+    $("#tab-alerts").classList.toggle("hidden", t.dataset.tab !== "alerts");
+  });
   $("#saved-list").addEventListener("change", (e) => {
-    const s = e.target.closest("[data-status]"); if (!s) return;
-    state.saved[s.dataset.status].status = s.value; store.set("saved", state.saved); renderSaved();
+    const s = e.target.closest("[data-status]");
+    if (s) { state.saved[s.dataset.status].status = s.value; store.set("saved", state.saved); renderSaved(); }
   });
-
-  // Alerts
-  $("#notify-btn").onclick = askNotify;
   $("#a-add").onclick = () => {
-    const f = { q: $("#a-q").value.trim(), location: $("#a-loc").value.trim(), remote: $("#a-remote").checked ? "remote" : "any",
-      job_type: $("#a-type").value ? [$("#a-type").value] : [], category: $("#a-cat").value ? [$("#a-cat").value] : [] };
-    addAlert(f); $("#a-q").value = ""; $("#a-loc").value = ""; renderAlerts();
+    const q = $("#a-q").value.trim(), locText = $("#a-loc").value.trim();
+    if (!q && !locText) { toast("Add a keyword or location", "Then press Create alert."); return; }
+    addAlert({ ...blank(), q, locText });
+    $("#a-q").value = ""; $("#a-loc").value = "";
   };
-  $("#alert-list").addEventListener("click", (e) => {
+  $("#tab-alerts").addEventListener("click", (e) => {
+    if (e.target.id === "notify-btn") Notification.requestPermission().then(renderAlerts);
     const rm = e.target.closest("[data-alert-rm]");
     if (rm) { state.alerts.splice(+rm.dataset.alertRm, 1); store.set("alerts", state.alerts); renderAlerts(); }
     const v = e.target.closest("[data-alert-view]");
-    if (v) { const f = state.alerts[+v.dataset.alertView].filters; location.hash = "#/jobs?" + filtersToParams({ ...blankFilters(), ...f }).toString(); }
+    if (v) { const f = state.alerts[+v.dataset.alertView].f; location.hash = "#/jobs?" + toParams({ ...blank(), ...f, place: f.place || [] }); }
   });
 
-  // Sources
-  $("#refresh-btn").onclick = async () => {
-    const r = await api("/api/refresh", { method: "POST" });
-    toast(r.started ? "Checking all sources" : "Already checked recently", r.reason || "New jobs will appear automatically.");
-  };
-
-  // Theme
-  const theme = store.get("theme", null);
-  if (theme) document.documentElement.dataset.theme = theme;
-  $("#theme-btn").onclick = () => {
-    const dark = document.documentElement.dataset.theme
-      ? document.documentElement.dataset.theme === "dark"
-      : matchMedia("(prefers-color-scheme: dark)").matches;
-    document.documentElement.dataset.theme = dark ? "light" : "dark";
-    store.set("theme", document.documentElement.dataset.theme);
-  };
+  // Cover letter
+  $("#resume").value = store.get("resume", "");
+  $("#resume").addEventListener("input", debounce((e) => store.set("resume", e.target.value), 300));
+  $("#make-letter").onclick = makeLetter;
+  $("#pdf-btn").onclick = downloadPdf;
+  $("#copy-btn").onclick = () => navigator.clipboard.writeText($("#letter").value).then(() => toast("Copied", "Paste it anywhere."));
+  $("#letter").addEventListener("input", debounce(letterNote, 300));
+  $("#picked").addEventListener("click", (e) => {
+    if (e.target.closest("#unpick")) { state.letterJob = null; store.set("letterJob", null); ["#jd-title", "#jd-company", "#jd-text"].forEach((s) => ($(s).value = "")); renderLetterJob(); }
+  });
+  const drop = $("#drop");
+  drop.addEventListener("click", () => $("#file").click());
+  drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("#file").click(); } });
+  $("#file").addEventListener("change", (e) => e.target.files[0] && uploadResume(e.target.files[0]));
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); e.dataTransfer.files[0] && uploadResume(e.dataTransfer.files[0]); });
 }
 
-// ------------------------------------------------------------------ boot
-(async function boot() {
+// ------------------------------------------------------------------ start
+(async function start() {
   bind();
   renderSavedCount();
-  document.documentElement.style.setProperty("--topbar-h", $("#topbar").offsetHeight + "px");
-  window.addEventListener("resize", () => document.documentElement.style.setProperty("--topbar-h", $("#topbar").offsetHeight + "px"));
-  await loadMeta();
-  if (!location.hash || location.hash === "#/jobs" || location.hash.startsWith("#/jobs")) {
-    if (!location.hash.includes("?")) history.replaceState(null, "", "#/jobs?");
-  }
   route();
-  if (!location.hash.startsWith("#/jobs")) loadJobs();
-  connectStream();
+  await loadMeta();
+  connect();
   setInterval(loadMeta, 30000);
-  setInterval(updateLiveText, 5000);
+  setInterval(liveText, 5000);
 })();

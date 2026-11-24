@@ -11,7 +11,7 @@ from typing import Any
 from . import config, db
 from .sources import SOURCES, new_client
 
-log = logging.getLogger("jobradar.poller")
+log = logging.getLogger("postedfresh.poller")
 
 # Seconds between checks for each source. Company boards are a single cheap
 # request each, so they are checked often; paginated feeds less often.
@@ -103,7 +103,7 @@ def _source_has_rows(name: str) -> bool:
 
 
 def _brief(j: dict[str, Any]) -> dict[str, Any]:
-    keys = ("id", "source", "title", "company", "department", "location", "remote", "category",
+    keys = ("id", "source", "title", "company", "department", "location", "location_display", "remote", "category",
             "job_type", "level", "salary", "url", "logo", "posted_at", "first_seen_at")
     return {k: j.get(k) for k in keys}
 

@@ -1,66 +1,79 @@
-# JobRadar
+# PostedFresh
 
-**Live job listings from 1,100+ companies, pushed to your browser within a minute of being posted.**
+**Fresh job listings from 1,100+ company career pages, on your screen within a minute of being posted. Free to use.**
 
-Most job sites show a role hours or days after the company posts it. JobRadar watches companies' own career boards (Greenhouse, Lever, Ashby, SmartRecruiters) directly, along with five public job boards. It checks them every 45 seconds and streams new postings to every open browser the moment they appear.
+![PostedFresh job board](docs/jobs.jpg)
+
+Most job sites show a role hours or days after the company posts it. PostedFresh watches companies' own career pages directly (Greenhouse, Lever, Ashby and SmartRecruiters), along with five public job boards. It checks them every 45 seconds and pushes new postings to every open browser the moment they appear.
 
 ## Features
 
 **Live job feed**
-- ~22,000 live listings from 1,100+ companies across 9 sources, refreshed continuously
-- New jobs appear in the list instantly (Server-Sent Events): no refresh, no polling from the browser
-- Company boards are checked every **45 s**, so a new posting reaches you in about a minute or less
-- Closed postings are removed as soon as a company takes them down
+- ~22,000 open listings from 1,100+ companies across 9 sources
+- New jobs appear at the top of the list automatically, with no refresh needed (Server-Sent Events)
+- Company career pages are checked every 45 seconds; closed postings are removed when a company takes them down
 
-**Search and filters**
-- Full-text search (SQLite FTS5) with "best match" ranking that weights title matches highest
-- Filter by **job type** (Full-time, Part-time, Internship, Apprenticeship, Seasonal, Temporary, Contract), **category** (16), **experience level**, **company**, **department**, **location**, remote/on-site, date posted, and "shows pay"
-- Live facet counts on every filter; filters live in the URL, so any search can be bookmarked or shared
+**Simple, accurate filters**
+- One search box with ranked, full-text search (SQLite FTS5)
+- A filter sidebar with collapsible sections: location, date posted, job type, role, experience, work setting, company and pay
+- **Job types:** Full-time, Part-time, Internship, Apprenticeship, Seasonal, Temporary, Contract
+- **Location** is a searchable dropdown. Messy location text from every source ("New York, NY (HQ)", "US-CA-Menlo Park", "bangalore, , India") is cleaned into city, state and country, so choosing "Texas, USA" finds every job in any Texas city.
+- Filters live in the URL, so any search can be bookmarked or shared
 
 **Everything before you click away**
-- A detail panel with the full description, pay, location, work arrangement, job type, level, department and posting date
-- "From the posting" facts pulled out automatically: years of experience, education, visa sponsorship, schedule, start date, deadline and benefits
-- Pay ranges extracted from the posting text when the source doesn't provide them (about half of all listings)
+- A detail panel with pay, location, job type, experience level, work setting, posting date and the full description
+- Highlights pulled from the posting: years of experience, education, visa sponsorship, schedule, start date, deadline and benefits
+- Pay ranges found in the posting text when the source doesn't provide them
 
-**Alerts and tracking**
-- Saved-search alerts with desktop notifications when a matching job is posted
-- Save jobs and track each application through Saved → Applied → Interviewing → Offer
+**Free cover letters**
+- Paste or upload a resume (PDF, Word or text), pick any job, and get an editable cover letter as a downloadable PDF
+- Built entirely on the server from your own resume: it finds the skills you share with the posting, turns your strongest resume bullets into sentences, and never adds anything that isn't on your resume
+- No accounts, no paid services; the resume stays in your browser
+
+**Saved jobs and alerts**
+- Save jobs and track each application: Saved, Applied, Interviewing, Offer
+- Turn any search into an alert and get a desktop notification when a matching job is posted
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     subgraph Sources
-        GH[Greenhouse<br/>71 boards]
+        GH[Greenhouse<br/>71 companies]
         LV[Lever]
         AS[Ashby]
         SR[SmartRecruiters]
         JB[Remotive · RemoteOK · Jobicy<br/>Himalayas · Arbeitnow]
     end
     subgraph Server["FastAPI server"]
-        P[Poller<br/>per-source loops] --> N[Normalizer<br/>type · level · category · pay]
+        P[Poller<br/>per-source loops] --> N[Normalizer<br/>type · level · role · pay · location]
         N --> DB[(SQLite + FTS5)]
-        P -- new jobs --> HUB[SSE hub]
+        P -- new jobs --> HUB[Live updates]
         API[REST API] --> DB
+        CL[Cover letters + PDF]
     end
     Sources --> P
     HUB -- push --> B[Browser]
     API <--> B
+    CL <--> B
 ```
 
-| Piece | What it does |
+| File | What it does |
 |---|---|
-| [`app/sources.py`](app/sources.py) | One fetcher per source. Greenhouse uses a light "list only" request each cycle and fetches full details only for new job IDs, so a check of all 71 boards takes about 1 second. |
-| [`app/poller.py`](app/poller.py) | One async loop per source on its own interval. It diffs against the DB, removes closed postings, and publishes new ones to the SSE hub. |
-| [`app/normalize.py`](app/normalize.py) | Maps every source onto one schema: job type, level, remote, pay, and key facts. |
-| [`app/categorize.py`](app/categorize.py) | Rule-based classifier into 16 categories, from the title first and then source hints. |
-| [`app/db.py`](app/db.py) | SQLite with WAL, indexes, an FTS5 index kept in sync by triggers, and faceted counts. |
-| [`static/`](static) | Vanilla JS single-page app with no build step: hash routing, SSE client and streaming fetch. |
+| [`app/sources.py`](app/sources.py) | One fetcher per source. Greenhouse uses a light "list only" request each cycle and fetches full details only for new jobs, so a check of all 71 companies takes about a second. |
+| [`app/poller.py`](app/poller.py) | One loop per source on its own schedule. It finds new and closed jobs and pushes new ones to browsers. |
+| [`app/locations.py`](app/locations.py) | Parses messy location text into city, state/region and country (about 95% of listings), which powers the location dropdown. |
+| [`app/normalize.py`](app/normalize.py) | Maps every source onto one format: job type, experience level, remote, pay and highlights. |
+| [`app/categorize.py`](app/categorize.py) | Sorts jobs into 16 roles from the title, falling back to the source's own labels. |
+| [`app/db.py`](app/db.py) | SQLite storage with full-text search, per-job places and filter counts. |
+| [`app/letter.py`](app/letter.py) | Resume reading, skill matching, the cover letter builder and PDF output. |
+| [`static/`](static) | Plain HTML, CSS and JavaScript, with no build step. |
 
 **Design choices**
-- **Company boards over aggregators.** Greenhouse, Lever and Ashby publish a job the instant the company does, so watching them directly is what makes JobRadar early.
-- **Push, not pull.** One server-side poller serves every user, and browsers receive new jobs over a single SSE connection.
-- **No build step.** The frontend is about 1,350 lines of plain HTML/CSS/JS, so anyone can read it and it deploys anywhere.
+- **Company career pages over aggregators.** Companies publish there first, which is what makes PostedFresh early.
+- **Push, not refresh.** One server-side poller serves everyone, and browsers get new jobs over a single live connection.
+- **Free to run.** No paid APIs or keys: every feature runs on the server itself.
+- **No build step.** Anyone can read the frontend, and it deploys anywhere.
 
 ## Run it locally
 
@@ -73,41 +86,47 @@ pip install -r requirements.txt
 uvicorn app.main:app --port 8000
 ```
 
-Open http://localhost:8000. The first sync takes about 30 seconds; jobs then stream in continuously.
+Open http://localhost:8000. The first sync takes about 30 seconds; after that, new jobs stream in continuously.
 
-### Configuration (`.env`)
+### Configuration (optional `.env`)
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GREENHOUSE_BOARDS`, `LEVER_BOARDS`, `ASHBY_BOARDS`, `SMARTRECRUITERS_COMPANIES` | built-in list | Which company career boards to watch (comma-separated slugs) |
-| `MAX_JOB_AGE_DAYS` | `45` | Age cutoff for job-board feeds (company boards keep a job while it's open) |
+| `GREENHOUSE_BOARDS`, `LEVER_BOARDS`, `ASHBY_BOARDS`, `SMARTRECRUITERS_COMPANIES` | built-in list | Which company career pages to watch (comma-separated) |
+| `MAX_JOB_AGE_DAYS` | `45` | Age cutoff for job-board feeds (company pages keep a job while it's open) |
 
-To watch another company, find its board slug in its careers URL (`boards.greenhouse.io/<slug>`, `jobs.lever.co/<slug>`, `jobs.ashbyhq.com/<slug>`) and add it.
+To watch another company, find its slug in its careers URL (`boards.greenhouse.io/<slug>`, `jobs.lever.co/<slug>`, `jobs.ashbyhq.com/<slug>`) and add it.
 
 ## Deploy
 
-The app is one process (the poller runs inside the web server), so deploy it as a single always-on instance with a persistent disk for the SQLite file:
+The poller runs inside the web server, so deploy it as a single always-on instance with a persistent disk for the SQLite file:
 
 ```bash
-docker build -t jobradar .
-docker run -p 8000:8000 -v jobradar-data:/data jobradar
+docker build -t postedfresh .
+docker run -p 8000:8000 -v postedfresh-data:/data postedfresh
 ```
 
 ## API
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/jobs` | Search with filters (`q`, `job_type`, `category`, `level`, `company`, `department`, `source` take `\|`-separated values; plus `location`, `remote`, `posted_within_hours`, `salary_only`, `sort`, `limit`, `offset`); returns jobs and facet counts |
-| `GET /api/jobs/{id}` | Full job, including description, pay and extracted facts |
-| `GET /api/stream` | Server-Sent Events: `{type: "new_jobs", jobs: [...]}` as they're discovered |
-| `GET /api/meta` | Stats, taxonomy and per-source health |
+| `GET /api/jobs` | Search with filters (`q`, `place`, `job_type`, `category`, `level`, `company` take `\|`-separated values; plus `remote`, `posted_within_hours`, `salary_only`, `sort`, `limit`, `offset`); returns jobs and filter counts |
+| `GET /api/jobs/{id}` | One job, with description, pay and highlights |
+| `GET /api/stream` | Live updates: `{type: "new_jobs", jobs: [...]}` as they're found |
+| `GET /api/meta` | Stats, filter options and the status of each source |
+| `POST /api/cover-letter` | Builds a cover letter from a resume and a job |
+| `POST /api/cover-letter/pdf` | Turns the letter text into a PDF |
+| `POST /api/resume/parse` | Reads text from an uploaded PDF, Word or text resume |
+
+![Cover letter](docs/letter.jpg)
 
 ## Limitations
 
-- Coverage is the set of watched boards and public feeds, not every job on the internet. LinkedIn and Indeed don't offer public APIs, so they aren't included.
-- Seasonal and apprenticeship roles are seasonal by nature; expect more of them in spring and before the holidays.
-- Alerts notify you while JobRadar is open in a browser tab (email or SMS alerts would be a natural next step).
-- Category, level and job type are inferred with rules, which are good but not perfect.
+- Coverage is the set of watched companies and public job boards, not every job on the internet. LinkedIn and Indeed don't offer public access, so they aren't included.
+- Seasonal and apprenticeship roles come and go with the time of year.
+- Alerts notify you while PostedFresh is open in a browser tab.
+- Roles, job types and experience levels are inferred from each posting, which is accurate for most jobs but not all.
 
 ## Tech
 
+Python · FastAPI · asyncio · httpx · SQLite (FTS5) · Server-Sent Events · fpdf2 · vanilla JavaScript · CSS

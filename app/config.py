@@ -27,10 +27,10 @@ def _list(name: str, default: str) -> list[str]:
     return [s.strip() for s in os.getenv(name, default).split(",") if s.strip()]
 
 
-DB_PATH = Path(os.getenv("JOBRADAR_DB", str(ROOT / "data" / "jobradar.db")))
+DB_PATH = Path(os.getenv("POSTEDFRESH_DB", str(ROOT / "data" / "postedfresh.db")))
 POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "300"))
 MAX_JOB_AGE_DAYS = int(os.getenv("MAX_JOB_AGE_DAYS", "45"))
-USER_AGENT = os.getenv("JOBRADAR_USER_AGENT", "JobRadar/1.0 (job aggregator; portfolio project)")
+USER_AGENT = os.getenv("POSTEDFRESH_USER_AGENT", "PostedFresh/2.0 (job aggregator; portfolio project)")
 
 # Company career boards to watch. These ATS APIs are public and update the
 # moment a company publishes a role, which is where "early" listings come from.

@@ -3,161 +3,237 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>JobRadar</title>
-  <meta name="description" content="Live job listings from 1,000+ companies, pushed the moment they're posted." />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><circle cx='12' cy='12' r='10' fill='%234f46e5'/><circle cx='12' cy='12' r='3' fill='white'/></svg>" />
-  <link rel="stylesheet" href="/static/styles.css" />
+  <title>PostedFresh: jobs the minute they're posted</title>
+  <meta name="description" content="Fresh job listings from 1,100+ company career pages, updated every minute. Internships, full-time, part-time, seasonal and more." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%230e9f6e'/><path d='M16 24v-8m0 0c0-4 3-7 7-7 0 4-3 7-7 7Zm0 0c0-3-2.5-5.5-5.5-5.5 0 3 2.5 5.5 5.5 5.5Z' stroke='white' stroke-width='2.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css?v=4" />
 </head>
 <body>
-  <header class="topbar" id="topbar">
-    <a class="brand" href="#/jobs">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6" opacity=".55"/><circle cx="12" cy="12" r="2" fill="currentColor"/><path d="M12 12 19 5" stroke-linecap="round"/></svg>
-      JobRadar
-    </a>
-    <nav class="nav">
-      <a href="#/jobs" data-view="jobs">Jobs</a>
-      <a href="#/saved" data-view="saved">Saved <span class="count hidden" id="saved-count"></span></a>
-      <a href="#/alerts" data-view="alerts">Alerts</a>
-      <a href="#/sources" data-view="sources">Sources</a>
-    </nav>
-    <div class="top-right">
-      <div class="stats" id="stats"></div>
-      <div class="live" id="live"><span class="dot"></span><span id="live-text">Connecting…</span></div>
-      <button class="icon-btn" id="theme-btn" title="Toggle theme" aria-label="Toggle theme">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
-      </button>
+  <header class="header">
+    <div class="header-inner">
+      <a class="brand" href="#/jobs" aria-label="PostedFresh home">
+        <span class="brand-mark">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20v-7m0 0c0-3.6 2.7-6.3 6.3-6.3 0 3.6-2.7 6.3-6.3 6.3Zm0 0c0-2.7-2.2-4.9-4.9-4.9 0 2.7 2.2 4.9 4.9 4.9Z"/></svg>
+        </span>
+        <span class="word">Posted<b>Fresh</b></span>
+      </a>
+      <nav class="nav" aria-label="Main">
+        <a href="#/jobs" data-view="jobs">Jobs</a>
+        <a href="#/saved" data-view="saved">Saved<span class="count hidden" id="saved-count"></span></a>
+        <a href="#/letter" data-view="letter">Cover letter</a>
+      </nav>
+      <div class="live" id="live" title="New jobs appear automatically">
+        <span class="dot"></span><span class="label" id="live-text">Connecting…</span>
+      </div>
     </div>
   </header>
 
-  <!-- ============================ JOBS ============================ -->
-  <section id="view-jobs" class="view jobs-view">
-    <div class="searchbar">
-      <label class="search-field">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-        <input class="input" id="f-q" placeholder="Job title, skill, or company" autocomplete="off" />
-      </label>
-      <label class="search-field">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s7-6.2 7-12a7 7 0 1 0-14 0c0 5.8 7 12 7 12z"/><circle cx="12" cy="10" r="2.5"/></svg>
-        <input class="input" id="f-location" placeholder="City, state, or country" list="location-list" autocomplete="off" />
-        <datalist id="location-list"></datalist>
-      </label>
-      <select class="input" id="f-remote" title="Work arrangement">
-        <option value="any">Remote + on-site</option>
-        <option value="remote">Remote only</option>
-        <option value="onsite">On-site / hybrid</option>
-      </select>
-      <select class="input" id="f-posted" title="Posted within">
-        <option value="0">Any time</option>
-        <option value="1">Past hour</option>
-        <option value="6">Past 6 hours</option>
-        <option value="24">Past 24 hours</option>
-        <option value="72">Past 3 days</option>
-        <option value="168">Past week</option>
-        <option value="720">Past 30 days</option>
-      </select>
-      <select class="input" id="f-sort" title="Sort">
-        <option value="newest">Newest posted</option>
-        <option value="relevance">Best match</option>
-        <option value="discovered">Just discovered</option>
-        <option value="company">Company A–Z</option>
-        <option value="title">Title A–Z</option>
-      </select>
-    </div>
-    <div class="quick-types" id="quick-types"></div>
+  <!-- ============================== JOBS ============================== -->
+  <main id="view-jobs" class="view">
+    <section class="search-band">
+      <div class="search-inner">
+        <button class="btn filter-toggle" id="filter-toggle" aria-controls="filters">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+          Filters <span class="count-badge" id="filter-count"></span>
+        </button>
+        <label class="search-box">
+          <span class="sr-only">Search jobs</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input class="input" id="q" type="search" placeholder="Search job title, skill or company" autocomplete="off" />
+        </label>
+        <div class="search-meta" id="search-meta"></div>
+      </div>
+    </section>
 
-    <div class="jobs-layout">
-      <aside class="filters" id="filters">
-        <div class="row between" style="margin-bottom:12px">
-          <strong>Filters</strong>
-          <button class="btn small ghost" id="clear-filters">Clear all</button>
+    <div class="jobs-wrap">
+      <aside class="filters" id="filters" aria-label="Filters">
+        <div class="filters-head">
+          <h2>Filters</h2>
+          <button class="link-btn hidden" id="clear-all">Clear all</button>
         </div>
-        <div class="filter-group">
-          <div class="toggle-row"><span>Shows pay</span><input type="checkbox" id="f-salary" /></div>
-        </div>
-        <div id="facet-groups"></div>
+
+        <details class="fgroup" data-group="place">
+          <summary>Location <span class="sel"></span><svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg></summary>
+          <div class="fbody">
+            <div class="combo" id="place-combo">
+              <input class="input fsearch" id="place-input" placeholder="Search city, state or country" autocomplete="off"
+                     role="combobox" aria-expanded="false" aria-controls="place-list" aria-autocomplete="list" />
+              <div class="combo-list hidden" id="place-list" role="listbox"></div>
+            </div>
+            <div class="chips" id="place-chips"></div>
+          </div>
+        </details>
+
+        <details class="fgroup" data-group="posted">
+          <summary>Date posted <span class="sel"></span><svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg></summary>
+          <div class="fbody" id="posted-opts"></div>
+        </details>
+
+        <details class="fgroup" data-group="job_type">
+          <summary>Job type <span class="sel"></span><svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg></summary>
+          <div class="fbody" id="job_type-opts"></div>
+        </details>
+
+        <details class="fgroup" data-group="category">
+          <summary>Role <span class="sel"></span><svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg></summary>
+          <div class="fbody" id="category-opts"></div>
+        </details>
+
+        <details class="fgroup" data-group="level">
+          <summary>Experience <span class="sel"></span><svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg></summary>
+          <div class="fbody" id="level-opts"></div>
+        </details>
+
+        <details class="fgroup" data-group="remote">
+          <summary>Work setting <span class="sel"></span><svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg></summary>
+          <div class="fbody" id="remote-opts"></div>
+        </details>
+
+        <details class="fgroup" data-group="company">
+          <summary>Company <span class="sel"></span><svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg></summary>
+          <div class="fbody">
+            <input class="input fsearch" id="company-search" placeholder="Search companies" autocomplete="off" />
+            <div class="opts-scroll" id="company-opts"></div>
+          </div>
+        </details>
+
+        <details class="fgroup" data-group="salary_only">
+          <summary>Pay <span class="sel"></span><svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg></summary>
+          <div class="fbody">
+            <label class="opt"><input type="checkbox" id="salary-only" /><span class="name">Only jobs that list pay</span></label>
+          </div>
+        </details>
+        <button class="btn primary drawer-done" id="drawer-done">Show jobs</button>
       </aside>
+      <div class="scrim" id="scrim"></div>
 
-      <main class="results" id="results">
+      <section aria-label="Job results">
         <div class="results-head">
-          <span id="result-count">Loading…</span>
-          <span class="row">
-            <button class="btn small mobile-only" id="toggle-filters">Filters</button>
-            <button class="btn small" id="save-alert-btn" title="Get notified when a new job matches these filters">🔔 Alert me</button>
-          </span>
-        </div>
-        <div class="active-filters" id="active-filters"></div>
-        <div id="new-banner" class="new-banner hidden"></div>
-        <div class="job-list" id="job-list"></div>
-        <button class="btn load-more hidden" id="load-more">Load more</button>
-      </main>
-
-      <aside class="detail" id="detail">
-        <div class="detail-empty" id="detail-empty">
-          <div>
-            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-            <p>Pick a job to see the full description, pay, location<br />and everything else before you leave the site.</p>
+          <div class="count" id="count">Loading jobs…</div>
+          <div class="tools">
+            <label class="sr-only" for="sort">Sort</label>
+            <select class="input" id="sort">
+              <option value="newest">Newest</option>
+              <option value="relevance">Best match</option>
+            </select>
+            <button class="btn sm" id="alert-btn" title="Get notified when a new job matches these filters">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+              Alert me
+            </button>
           </div>
         </div>
-        <div class="detail-inner hidden" id="detail-inner"></div>
+        <div class="active-row hidden" id="active-row"></div>
+        <button class="new-banner hidden" id="new-banner"></button>
+        <div class="job-list" id="job-list"></div>
+        <button class="btn load-more hidden" id="load-more">Show more jobs</button>
+      </section>
+
+      <aside class="detail" id="detail" aria-label="Job details">
+        <div class="detail-empty" id="detail-empty">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          <p>Select a job to see pay, location<br />and the full description.</p>
+        </div>
+        <div class="detail-body hidden" id="detail-body"></div>
       </aside>
     </div>
-  </section>
+  </main>
 
-  <!-- ============================ SAVED ============================ -->
-  <section id="view-saved" class="view page hidden">
+  <!-- ============================== SAVED ============================== -->
+  <main id="view-saved" class="view page hidden">
     <div class="page-head">
-      <div><h1>Saved jobs</h1><p>Track where you are with each application. Stored in this browser.</p></div>
+      <h1>Saved</h1>
+      <p>Jobs you've saved and your job alerts. Stored privately in this browser.</p>
     </div>
-    <div class="pipeline" id="pipeline"></div>
-    <div class="list" id="saved-list"></div>
-  </section>
-
-  <!-- ============================ ALERTS ============================ -->
-  <section id="view-alerts" class="view page hidden">
-    <div class="page-head">
-      <div><h1>Job alerts</h1><p>Get a desktop notification the moment a matching job is posted, while JobRadar is open in a tab.</p></div>
-      <button class="btn" id="notify-btn">Enable desktop notifications</button>
+    <div class="tabs" role="tablist">
+      <button class="tab on" data-tab="jobs" role="tab">Saved jobs</button>
+      <button class="tab" data-tab="alerts" role="tab">Alerts</button>
     </div>
-    <div class="grid-2">
-      <div class="card stack" style="padding:16px">
-        <p class="label" style="margin:0">New alert</p>
-        <input class="input" id="a-q" placeholder="Keywords, e.g. data analyst, nurse, marketing intern" />
-        <input class="input" id="a-loc" placeholder="Location (optional), e.g. New York, Germany, Remote" />
+    <section id="tab-jobs">
+      <div class="pipeline" id="pipeline"></div>
+      <div class="list" id="saved-list"></div>
+    </section>
+    <section id="tab-alerts" class="hidden">
+      <div class="card alert-form">
         <div class="row">
-          <select class="input" id="a-type" style="flex:1"><option value="">Any job type</option></select>
-          <select class="input" id="a-cat" style="flex:1"><option value="">Any category</option></select>
+          <input class="input" id="a-q" placeholder="Keywords, e.g. marketing intern" />
+          <input class="input" id="a-loc" placeholder="Location (optional), e.g. Texas" />
+          <button class="btn primary" id="a-add">Create alert</button>
         </div>
-        <label class="row" style="gap:6px"><input type="checkbox" id="a-remote" /> Remote only</label>
-        <button class="btn primary" id="a-add">Create alert</button>
+        <div class="muted" style="font-size:12.5px">Tip: set up filters on the Jobs page and press <b>Alert me</b> to save them as an alert.</div>
       </div>
+      <div class="note ok hidden" id="notify-note"></div>
+      <div class="list" id="alert-list"></div>
+    </section>
+  </main>
+
+  <!-- ============================== COVER LETTER ============================== -->
+  <main id="view-letter" class="view page hidden">
+    <div class="page-head">
+      <h1>Cover letter</h1>
+      <p>Add your resume and a job, and PostedFresh drafts a cover letter you can edit and save as a PDF. Free, and your resume stays in your browser.</p>
+    </div>
+    <div class="letter-grid">
       <div class="stack">
-        <div class="list" id="alert-list"></div>
-        <div class="card" style="padding:16px">
-          <p class="label">Recent matches</p>
-          <div class="list" id="alert-hits"><span class="faint">Matches show up here as jobs are posted.</span></div>
+        <div class="card stack">
+          <p class="step-title"><span class="step-num">1</span>Your resume</p>
+          <div class="drop" id="drop" tabindex="0">Drop a PDF, Word or text file, or <span class="link-btn">browse</span>
+            <input type="file" id="file" accept=".pdf,.docx,.txt,.md" hidden />
+          </div>
+          <textarea class="input" id="resume" rows="9" placeholder="…or paste your resume here"></textarea>
+        </div>
+        <div class="card stack">
+          <p class="step-title"><span class="step-num">2</span>The job</p>
+          <div id="picked"></div>
+          <input class="input" id="jd-title" placeholder="Job title" />
+          <input class="input" id="jd-company" placeholder="Company" />
+          <textarea class="input" id="jd-text" rows="5" placeholder="Job description (optional, helps match your skills)"></textarea>
+          <div class="muted" style="font-size:12.5px">Tip: open any job and press <b>Write cover letter</b> to fill this in.</div>
+        </div>
+        <button class="btn primary" id="make-letter" style="height:44px">Create cover letter</button>
+      </div>
+      <div class="paper-wrap">
+        <div id="letter-note"></div>
+        <div class="paper" id="paper">
+          <div class="paper-empty" id="paper-empty">Your cover letter will appear here.</div>
+          <textarea id="letter" class="hidden" aria-label="Cover letter text" spellcheck="true"></textarea>
+        </div>
+        <div class="letter-bar hidden" id="letter-bar">
+          <button class="btn primary" id="pdf-btn">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v12m0 0-4-4m4 4 4-4M5 21h14"/></svg>
+            Download PDF
+          </button>
+          <button class="btn" id="copy-btn">Copy text</button>
+          <div id="skills-line" class="muted" style="font-size:12.5px; margin-left:auto"></div>
         </div>
       </div>
     </div>
-  </section>
+  </main>
 
-  <!-- ============================ SOURCES ============================ -->
-  <section id="view-sources" class="view page hidden">
+  <!-- ============================== ABOUT ============================== -->
+  <main id="view-about" class="view page hidden">
     <div class="page-head">
-      <div><h1>How JobRadar finds jobs early</h1><p>Every source is checked on a loop. New postings are pushed to your browser the moment they're found.</p></div>
-      <button class="btn" id="refresh-btn">Check all sources now</button>
+      <h1>How PostedFresh works</h1>
+      <p>Most job sites show a role hours or days after it's posted. PostedFresh checks companies' own career pages directly, so you can apply early.</p>
     </div>
     <div class="how">
-      <div class="card"><div class="step">1</div><h3>Watch company boards</h3><p>Greenhouse, Lever, Ashby and SmartRecruiters career pages update the moment a company publishes a role, often before it reaches big job sites.</p></div>
-      <div class="card"><div class="step">2</div><h3>Check every 45 seconds</h3><p>A lightweight "what's new" check runs on every board every 45 seconds. Only brand-new postings are downloaded in full.</p></div>
-      <div class="card"><div class="step">3</div><h3>Normalize</h3><p>Every posting is mapped to one schema: category, job type, level, department, location and pay.</p></div>
-      <div class="card"><div class="step">4</div><h3>Push instantly</h3><p>New jobs stream to open browsers over Server-Sent Events and trigger your alerts.</p></div>
+      <div class="card"><h3>Straight from the source</h3><p>We watch career pages at 1,100+ companies, plus public job boards, for every kind of role.</p></div>
+      <div class="card"><h3>Checked every minute</h3><p>New postings show up here within about a minute, and appear on your screen automatically.</p></div>
+      <div class="card"><h3>Closed jobs disappear</h3><p>When a company takes a job down, it's removed here too, so you don't waste time.</p></div>
     </div>
-    <div class="card" style="overflow-x:auto">
-      <table class="tbl" id="sources-table"></table>
-    </div>
-  </section>
+    <div class="card" style="overflow-x:auto"><table class="tbl" id="sources-table"></table></div>
+  </main>
 
-  <div class="toasts" id="toasts"></div>
-  <script src="/static/app.js"></script>
+  <footer class="footer">
+    <div class="footer-inner">
+      <span>PostedFresh: fresh jobs from 1,100+ company career pages, updated every minute.</span>
+      <a href="#/about">How it works</a>
+    </div>
+  </footer>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <script src="/static/app.js?v=4"></script>
 </body>
 </html>

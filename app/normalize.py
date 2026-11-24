@@ -18,7 +18,7 @@ LEVELS = ["Internship", "Entry", "Mid", "Senior", "Manager", "Executive"]
 # is an internship, a "Seasonal Part-time Associate" is seasonal.
 _TYPE_RULES = [
     ("Apprenticeship", r"apprentic|ausbildung|azubi|alternance|aprendiz"),
-    ("Internship", r"\bintern\b|internship|co-?op\b|werkstudent|working student|praktik|stagiaire|\bstage\b|trainee|placement year|summer analyst|summer associate"),
+    ("Internship", r"\bintern\b|internship|co-?op\b|werkstudent|working student|praktik|stagiaire|\bstage (de|d'|en)\b|trainee|placement year|summer analyst|summer associate"),
     ("Seasonal", r"seasonal|holiday (help|season)|summer (job|camp|staff|season)|winter season|christmas"),
     ("Part-time", r"part[- ]?time|teilzeit|minijob|temps partiel|\bpt\b"),
     ("Temporary", r"\btemp\b|temporary|fixed[- ]term|befristet|interim|\blocum\b"),
@@ -262,6 +262,11 @@ def key_facts(job: dict[str, Any]) -> list[dict[str, str]]:
             start = m.start(1)
             if start > 0 and text[start - 1].isalnum() and " " in val:
                 val = val.split(" ", 1)[1]  # don't start mid-word
+            end = m.end(1)
+            if end < len(text) and text[end].isalnum() and " " in val:
+                val = val.rsplit(" ", 1)[0] + "…"  # don't stop mid-word
+            if start > 0 and text[start - 1].isalnum():
+                val = "…" + val
             val = re.sub(r"\s+", " ", val).strip(" ,;:-•")
             facts.append({"label": label, "value": val[:140]})
     perks = [name for name, rx in _BENEFITS_RX if rx.search(text)]

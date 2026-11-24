@@ -65,6 +65,88 @@ ROLE_GROUPS = [
 ]
 assert sorted(r for _, rs in ROLE_GROUPS for r in rs) == sorted(c for c in CATEGORIES if c != "Other")
 
+# Clear job names, checked against the MAIN part of the title first (before any
+# comma, dash or bracket): that's what the person actually does. "Account
+# Executive, Security" is a sales job; "Executive Assistant, Marketing" is an
+# assistant; "Software Engineer, Salesflow" is an engineer. Most specific first.
+_HEAD_RULES: list[tuple[str, str]] = [
+    ("Healthcare", r"pharmacy (technician|tech|intern)|pharmacist|registered nurse|\bnurse\b|nurse practitioner|physician|"
+                   r"medical assistant|patient care|surgical tech|radiolog|therapist|dental (assistant|hygienist)|caregiver|"
+                   r"\bcna\b|\blpn\b|\brn\b|clinician|psychiatr|psycholog|counselor|\bcoder\b|coding (specialist|auditor)|"
+                   r"medical (billing|coding)|health information"),
+    ("Data Science & Machine Learning", r"data scientist|machine learning|\bml engineer|applied scientist|"
+                                       r"research (scientist|engineer)(?!.*(chem|bio|material|physic|clinical|pharma|lab|food|agri))"),
+    ("Science & Research", r"lab(oratory)? (technician|tech|assistant|manager)|research associate|chemist|biologist|"
+                           r"microbiolog|scientist"),
+    ("IT & Systems", r"\bit (support|technician|specialist|administrator|engineer|manager|analyst|director|operations)|"
+                     r"help ?desk|desktop support|system(s)? administrator|sysadmin|network (engineer|administrator|technician)"),
+    ("Facilities & Security Services", r"security (officer|guard|agent|supervisor)|custodian|janitor|cleaner|"
+                                       r"facilities (technician|coordinator|manager|associate)"),
+    ("Cybersecurity", r"security (engineer|analyst|architect|researcher|specialist|consultant)|soc analyst|"
+                      r"penetration tester|threat (hunter|analyst|intelligence)|detection engineer|trust (and|&) safety"),
+    ("Data Engineering", r"data engineer|analytics engineer|database (engineer|administrator)|\bdba\b"),
+    ("DevOps & Cloud", r"devops|site reliability|\bsre\b|platform engineer|cloud engineer|infrastructure engineer|"
+                       r"release engineer|build engineer"),
+    ("Analyst", r"\banalyst\b|analista|business intelligence"),
+    ("Project & Program Management", r"project manager|program manager|programme manager|project coordinator|"
+                                     r"program coordinator|scrum master|delivery manager|\btpm\b|project lead"),
+    ("Product Management", r"product manager|product owner|product lead|head of product|director,? (of )?product\b|"
+                           r"vp,? (of )?product\b|group product"),
+    ("Sales", r"sales engineer|solutions? engineer|account executive|\bae\b|sales (representative|rep|manager|director|"
+              r"specialist|consultant|executive|lead|development|associate(?!.*(store|retail)))|business development|\bbdr\b|\bsdr\b|"
+              r"development representative|inside sales|channel (sales|manager)|partnerships (manager|lead|director)|seller"),
+    ("Software Engineering", r"software (engineer|developer|engineering manager|architect)|engineering manager|tech lead|"
+                             r"back[- ]?end (engineer|developer)|front[- ]?end (engineer|developer)|full[- ]?stack|"
+                             r"mobile (engineer|developer)|ios (engineer|developer)|android (engineer|developer)|"
+                             r"web developer|\bsdet\b|qa engineer|test automation engineer|game (programmer|developer)|"
+                             r"firmware engineer|embedded (software )?engineer|member of technical staff|\bswe\b|\bsde\b"),
+    ("Hardware & Engineering", r"(mechanical|electrical|civil|structural|aerospace|chemical|manufacturing|process|quality|"
+                               r"hardware|propulsion|avionics|rf|systems|test|design|controls|reliability|materials|industrial|"
+                               r"thermal|optical|robotics|validation) engineer"),
+    ("Skilled Trades & Manufacturing", r"technician|\b(controls|maintenance|field|service|repair|hvac|electrical|facilities|"
+                                       r"data center|network|cable|install) tech\b|welder|electrician|machinist|mechanic|assembler|fabricator|plumber|"
+                                       r"hvac|carpenter|\boperator\b|millwright|pipefitter|maintenance (worker|associate|tech)"),
+    ("Design & Creative", r"designer|ux researcher|user researcher|art director|creative director|illustrator|animator|"
+                          r"video editor|photographer|motion"),
+    ("Consulting", r"consultant|consulting|advisory"),
+    ("Account Management & Customer Success", r"customer success|client success|account manager|relationship manager|"
+                                              r"implementation (manager|specialist|consultant)|account director|client partner"),
+    ("Marketing", r"marketing (manager|specialist|director|coordinator|lead|associate|analyst)|marketer|brand manager|"
+                  r"seo (manager|specialist)|growth (manager|lead)|social media (manager|specialist|coordinator)|"
+                  r"community manager|campaign manager"),
+    ("Communications & PR", r"communications (manager|specialist|director|lead)|public relations|\bpr (manager|specialist)"),
+    ("Writing & Content", r"copywriter|writer|editor|content (strategist|designer|producer|manager)|translator"),
+    ("HR & Recruiting", r"recruiter|recruiting|talent acquisition|sourcer|hr (business partner|manager|generalist|specialist)|"
+                        r"people (partner|business partner|operations)|human resources|payroll specialist"),
+    ("Finance & Accounting", r"accountant|accounting|controller|bookkeeper|auditor|tax (manager|specialist|associate)|"
+                             r"\bfp&a\b|treasury|accounts (payable|receivable)|credit (analyst|manager)|actuary|underwriter"),
+    ("Legal & Compliance", r"counsel|attorney|lawyer|paralegal|legal (assistant|specialist|operations)|compliance (officer|manager|"
+                           r"specialist|analyst)|privacy (officer|manager)|contracts manager"),
+    ("Education & Training", r"teacher|tutor|professor|lecturer|instructional designer|curriculum"),
+    ("Fitness & Wellness", r"personal trainer|pilates|yoga|barre|fitness (instructor|coach|manager)|massage therapist|esthetician"),
+    ("Retail & Hospitality", r"barista|cashier|store (associate|manager|lead)|sales associate|retail associate|\bcook\b|"
+                             r"\bchef\b|bartender|\bserver\b(?!.*(engineer|admin))|housekeep|front desk|concierge|crew member|"
+                             r"style advisor|host(ess)?\b"),
+    ("Supply Chain & Logistics", r"warehouse|forklift|delivery (driver|associate)|\bdriver\b|\bbuyer\b|logistics|"
+                                 r"supply chain|procurement|purchasing|inventory|dispatcher|planner"),
+    ("Customer Support", r"customer (service|support|care)|support (specialist|engineer|agent|representative|associate)|"
+                         r"technical support|call center"),
+    ("Administrative", r"executive assistant|administrative assistant|admin assistant|receptionist|office (manager|coordinator|"
+                       r"administrator)|personal assistant|secretary"),
+    ("Operations & Strategy", r"chief of staff|operations (manager|director|lead|specialist|associate)|business operations|"
+                              r"strategy (manager|director|lead)|general manager"),
+]
+_HEAD_COMPILED = [(cat, re.compile(pat, re.I)) for cat, pat in _HEAD_RULES]
+_LAB_SCIENCE = re.compile(r"chem|biolog|biologic|material|physic|clinical|pharma|\blab\b|food|agri|geolog|climate|"
+                          r"neuro|genom|protein|cell|immun|molecular|toxicolog", re.I)
+_MAIN_PART = re.compile(r"\s[-–—|]\s|,|\(|:|\s/\s")
+
+
+def main_title(title: str) -> str:
+    """'Senior Account Executive, Security (Remote)' -> 'Senior Account Executive'."""
+    return _MAIN_PART.split(title or "", 1)[0]
+
+
 # Order matters: the first matching rule wins.
 _RULES: list[tuple[str, str]] = [
     ("Retail & Hospitality",
@@ -232,6 +314,13 @@ _HARDWARE_HINT = re.compile(r"hardware|mechanical|electrical|manufactur|producti
 
 def categorize(title: str, hints: list[str] | None = None) -> str:
     title = title or ""
+    main = main_title(title)
+    # "Research Scientist, Materials Chemistry" is lab science, not machine learning.
+    if re.search(r"research (scientist|engineer)|^scientist", main, re.I) and _LAB_SCIENCE.search(title):
+        return "Science & Research"
+    for cat, rx in _HEAD_COMPILED:  # what the person actually does
+        if rx.search(main):
+            return cat
     for cat, rx in _COMPILED:
         if rx.search(title):
             return cat

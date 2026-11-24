@@ -221,10 +221,12 @@ function summaryText(key) {
   return v.length === 1 ? v[0] : v.length ? `${v.length} selected` : "";
 }
 
-function checkList(key, rows, all) {
+// keepSelected: also list options the user picked that aren't in `all` (e.g. a company
+// that fell out of the top list). Never for role groups: each group lists only its own roles.
+function checkList(key, rows, all, keepSelected = true) {
   const counts = Object.fromEntries(rows);
-  const values = all || rows.map((r) => r[0]);
-  for (const v of state.f[key]) if (!values.includes(v)) values.unshift(v);
+  const values = [...(all || rows.map((r) => r[0]))];
+  if (keepSelected) for (const v of state.f[key]) if (!values.includes(v)) values.unshift(v);
   return values.map((v) => {
     const n = counts[v] || 0, on = state.f[key].includes(v);
     return `<label class="opt${!n && !on ? " zero" : ""}"><input type="checkbox" data-f="${key}" value="${esc(v)}"${on ? " checked" : ""}>
@@ -270,10 +272,10 @@ function renderRoles() {
       <div class="opt rhead"><input type="checkbox" data-group="${esc(group)}" ${state_} ${picked && picked < roles.length ? 'data-partial="1"' : ""} aria-label="All ${esc(group)} roles">
         <button class="rtoggle" data-toggle="${esc(group)}" aria-expanded="${open ? "true" : "false"}"><span class="name">${esc(group)}</span>
         <span class="n">${num(total)}</span><svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg></button></div>
-      ${open ? `<div class="rroles">${checkList("category", state.facets.category || [], shown.slice().sort((a, b) => (cats[b] || 0) - (cats[a] || 0)))}</div>` : ""}
+      ${open ? `<div class="rroles">${checkList("category", state.facets.category || [], shown.slice().sort((a, b) => (cats[b] || 0) - (cats[a] || 0)), false)}</div>` : ""}
     </div>`;
   }
-  if (!term || "other".includes(term)) html += checkList("category", state.facets.category || [], ["Other"]);
+  if (!term || "other".includes(term)) html += checkList("category", state.facets.category || [], ["Other"], false);
   $("#category-opts").innerHTML = html || `<div class="combo-empty">No roles found</div>`;
   $$('#category-opts input[data-partial]').forEach((el) => (el.indeterminate = true));
 }

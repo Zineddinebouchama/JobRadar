@@ -118,7 +118,7 @@ CREATE TABLE IF NOT EXISTS events (
 # Bump when the location parser changes so stored places are rebuilt.
 LOCATIONS_VERSION = "3"
 # Bump when the role / job type / level rules change so stored jobs are re-checked.
-CLASSIFY_VERSION = "8"
+CLASSIFY_VERSION = "9"
 
 FIELDS = [
     "title", "company", "department", "location", "remote", "category", "job_type",

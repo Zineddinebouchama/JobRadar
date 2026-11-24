@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JobRadar</title>
+  <meta name="description" content="Live job listings from 1,000+ companies, pushed the moment they're posted." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><circle cx='12' cy='12' r='10' fill='%234f46e5'/><circle cx='12' cy='12' r='3' fill='white'/></svg>" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar" id="topbar">
+    <a class="brand" href="#/jobs">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6" opacity=".55"/><circle cx="12" cy="12" r="2" fill="currentColor"/><path d="M12 12 19 5" stroke-linecap="round"/></svg>
+      JobRadar
+    </a>
+    <nav class="nav">
+      <a href="#/jobs" data-view="jobs">Jobs</a>
+      <a href="#/saved" data-view="saved">Saved <span class="count hidden" id="saved-count"></span></a>
+      <a href="#/alerts" data-view="alerts">Alerts</a>
+      <a href="#/sources" data-view="sources">Sources</a>
+    </nav>
+    <div class="top-right">
+      <div class="stats" id="stats"></div>
+      <div class="live" id="live"><span class="dot"></span><span id="live-text">Connecting…</span></div>
+      <button class="icon-btn" id="theme-btn" title="Toggle theme" aria-label="Toggle theme">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ============================ JOBS ============================ -->
+  <section id="view-jobs" class="view jobs-view">
+    <div class="searchbar">
+      <label class="search-field">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input class="input" id="f-q" placeholder="Job title, skill, or company" autocomplete="off" />
+      </label>
+      <label class="search-field">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s7-6.2 7-12a7 7 0 1 0-14 0c0 5.8 7 12 7 12z"/><circle cx="12" cy="10" r="2.5"/></svg>
+        <input class="input" id="f-location" placeholder="City, state, or country" list="location-list" autocomplete="off" />
+        <datalist id="location-list"></datalist>
+      </label>
+      <select class="input" id="f-remote" title="Work arrangement">
+        <option value="any">Remote + on-site</option>
+        <option value="remote">Remote only</option>
+        <option value="onsite">On-site / hybrid</option>
+      </select>
+      <select class="input" id="f-posted" title="Posted within">
+        <option value="0">Any time</option>
+        <option value="1">Past hour</option>
+        <option value="6">Past 6 hours</option>
+        <option value="24">Past 24 hours</option>
+        <option value="72">Past 3 days</option>
+        <option value="168">Past week</option>
+        <option value="720">Past 30 days</option>
+      </select>
+      <select class="input" id="f-sort" title="Sort">
+        <option value="newest">Newest posted</option>
+        <option value="relevance">Best match</option>
+        <option value="discovered">Just discovered</option>
+        <option value="company">Company A–Z</option>
+        <option value="title">Title A–Z</option>
+      </select>
+    </div>
+    <div class="quick-types" id="quick-types"></div>
+
+    <div class="jobs-layout">
+      <aside class="filters" id="filters">
+        <div class="row between" style="margin-bottom:12px">
+          <strong>Filters</strong>
+          <button class="btn small ghost" id="clear-filters">Clear all</button>
+        </div>
+        <div class="filter-group">
+          <div class="toggle-row"><span>Shows pay</span><input type="checkbox" id="f-salary" /></div>
+        </div>
+        <div id="facet-groups"></div>
+      </aside>
+
+      <main class="results" id="results">
+        <div class="results-head">
+          <span id="result-count">Loading…</span>
+          <span class="row">
+            <button class="btn small mobile-only" id="toggle-filters">Filters</button>
+            <button class="btn small" id="save-alert-btn" title="Get notified when a new job matches these filters">🔔 Alert me</button>
+          </span>
+        </div>
+        <div class="active-filters" id="active-filters"></div>
+        <div id="new-banner" class="new-banner hidden"></div>
+        <div class="job-list" id="job-list"></div>
+        <button class="btn load-more hidden" id="load-more">Load more</button>
+      </main>
+
+      <aside class="detail" id="detail">
+        <div class="detail-empty" id="detail-empty">
+          <div>
+            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            <p>Pick a job to see the full description, pay, location<br />and everything else before you leave the site.</p>
+          </div>
+        </div>
+        <div class="detail-inner hidden" id="detail-inner"></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ============================ SAVED ============================ -->
+  <section id="view-saved" class="view page hidden">
+    <div class="page-head">
+      <div><h1>Saved jobs</h1><p>Track where you are with each application. Stored in this browser.</p></div>
+    </div>
+    <div class="pipeline" id="pipeline"></div>
+    <div class="list" id="saved-list"></div>
+  </section>
+
+  <!-- ============================ ALERTS ============================ -->
+  <section id="view-alerts" class="view page hidden">
+    <div class="page-head">
+      <div><h1>Job alerts</h1><p>Get a desktop notification the moment a matching job is posted, while JobRadar is open in a tab.</p></div>
+      <button class="btn" id="notify-btn">Enable desktop notifications</button>
+    </div>
+    <div class="grid-2">
+      <div class="card stack" style="padding:16px">
+        <p class="label" style="margin:0">New alert</p>
+        <input class="input" id="a-q" placeholder="Keywords, e.g. data analyst, nurse, marketing intern" />
+        <input class="input" id="a-loc" placeholder="Location (optional), e.g. New York, Germany, Remote" />
+        <div class="row">
+          <select class="input" id="a-type" style="flex:1"><option value="">Any job type</option></select>
+          <select class="input" id="a-cat" style="flex:1"><option value="">Any category</option></select>
+        </div>
+        <label class="row" style="gap:6px"><input type="checkbox" id="a-remote" /> Remote only</label>
+        <button class="btn primary" id="a-add">Create alert</button>
+      </div>
+      <div class="stack">
+        <div class="list" id="alert-list"></div>
+        <div class="card" style="padding:16px">
+          <p class="label">Recent matches</p>
+          <div class="list" id="alert-hits"><span class="faint">Matches show up here as jobs are posted.</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ SOURCES ============================ -->
+  <section id="view-sources" class="view page hidden">
+    <div class="page-head">
+      <div><h1>How JobRadar finds jobs early</h1><p>Every source is checked on a loop. New postings are pushed to your browser the moment they're found.</p></div>
+      <button class="btn" id="refresh-btn">Check all sources now</button>
+    </div>
+    <div class="how">
+      <div class="card"><div class="step">1</div><h3>Watch company boards</h3><p>Greenhouse, Lever, Ashby and SmartRecruiters career pages update the moment a company publishes a role, often before it reaches big job sites.</p></div>
+      <div class="card"><div class="step">2</div><h3>Check every 45 seconds</h3><p>A lightweight "what's new" check runs on every board every 45 seconds. Only brand-new postings are downloaded in full.</p></div>
+      <div class="card"><div class="step">3</div><h3>Normalize</h3><p>Every posting is mapped to one schema: category, job type, level, department, location and pay.</p></div>
+      <div class="card"><div class="step">4</div><h3>Push instantly</h3><p>New jobs stream to open browsers over Server-Sent Events and trigger your alerts.</p></div>
+    </div>
+    <div class="card" style="overflow-x:auto">
+      <table class="tbl" id="sources-table"></table>
+    </div>
+  </section>
+
+  <div class="toasts" id="toasts"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

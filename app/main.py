@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, db, letter, poller
+from . import config, db, letter, logos, poller
 from .categorize import CATEGORIES
 from .normalize import JOB_TYPES, LEVELS, extract_salary, key_facts
 from .sources import smartrecruiters_description
@@ -118,6 +118,16 @@ async def stream(request: Request):
 
     return StreamingResponse(events(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/logo/{domain}")
+async def logo(domain: str):
+    client = poller.app_client.get("client")
+    found = await logos.get_logo(client, domain) if client else None
+    if not found:
+        raise HTTPException(404, "No logo")
+    data, ctype = found
+    return Response(data, media_type=ctype, headers={"Cache-Control": "public, max-age=604800"})
 
 
 # --------------------------------------------------------------------------- #

@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=4" />
+  <link rel="stylesheet" href="/static/styles.css?v=6" />
 </head>
 <body>
   <header class="header">
@@ -45,6 +45,13 @@
           <input class="input" id="q" type="search" placeholder="Search job title, skill or company" autocomplete="off" />
         </label>
         <div class="search-meta" id="search-meta"></div>
+      </div>
+    </section>
+
+    <section class="ticker" aria-label="Just posted">
+      <div class="ticker-inner">
+        <span class="ticker-label"><span class="pip"></span>Just posted</span>
+        <div class="ticker-track" id="ticker"></div>
       </div>
     </section>
 
@@ -234,6 +241,6 @@
   </footer>
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
-  <script src="/static/app.js?v=4"></script>
+  <script src="/static/app.js?v=6"></script>
 </body>
 </html>

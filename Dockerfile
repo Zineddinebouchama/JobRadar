@@ -12,4 +12,4 @@ COPY static ./static
 VOLUME /data
 EXPOSE 8000
 # One worker: the poller runs inside the app process and pushes to its SSE clients.
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --timeout-graceful-shutdown 3"]

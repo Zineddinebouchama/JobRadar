@@ -22,15 +22,49 @@ function ago(iso) {
   if (s < 86400 * 30) return `${Math.floor(s / 86400)}d ago`;
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
-const isFresh = (iso) => Date.now() - new Date(iso).getTime() < 3 * 3600e3;
+// Freshness: bright green when just posted, fading to gray as the job ages.
+function freshness(iso) {
+  const m = (Date.now() - new Date(iso).getTime()) / 60000;
+  const level = m < 15 ? 1 : m < 60 ? 2 : m < 360 ? 3 : m < 1440 ? 4 : 5;
+  return { level, text: ago(iso) };
+}
+function freshBadge(iso) {
+  const f = freshness(iso);
+  return `<span class="fresh f${f.level}" data-ts="${esc(iso)}">${f.level === 1 ? '<span class="pip"></span>' : ""}${esc(f.text)}</span>`;
+}
+function refreshBadges() {
+  $$(".fresh[data-ts]").forEach((el) => {
+    const f = freshness(el.dataset.ts);
+    el.className = `fresh f${f.level}`;
+    el.innerHTML = (f.level === 1 ? '<span class="pip"></span>' : "") + esc(f.text);
+  });
+}
+
+// Soft color pairs for companies without a logo, picked consistently from the name.
+const TINTS = [["#e7f7ef", "#047857"], ["#eef4ff", "#1d4ed8"], ["#fdf2f8", "#be185d"], ["#fff6e5", "#a15c00"],
+  ["#f3efff", "#6d28d9"], ["#e6f6fb", "#0e7490"], ["#fef2f2", "#b91c1c"], ["#f1f5f9", "#334155"]];
+function tint(name) {
+  let h = 0;
+  for (const ch of String(name || "")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return TINTS[h % TINTS.length];
+}
 
 function initials(name) {
   return (name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 }
-function logo(job) {
+function logo(job, cls = "logo") {
+  const [bg, ink] = tint(job.company);
   const fb = esc(initials(job.company));
-  if (!job.logo) return `<div class="logo">${fb}</div>`;
-  return `<div class="logo"><img src="${esc(job.logo)}" alt="" loading="lazy" onerror="this.parentNode.textContent='${fb}'"></div>`;
+  if (!job.logo) return `<div class="${cls}" style="background:${bg};color:${ink}">${fb}</div>`;
+  return `<div class="${cls} has-img" data-bg="${bg}" data-ink="${ink}" data-fb="${fb}"><img src="${esc(job.logo)}" alt="" loading="lazy" onerror="logoFailed(this)"></div>`;
+}
+// A logo that fails to load becomes colored initials.
+function logoFailed(img) {
+  const box = img.parentNode;
+  box.className = box.className.replace(" has-img", "");
+  box.style.background = box.dataset.bg;
+  box.style.color = box.dataset.ink;
+  box.textContent = box.dataset.fb;
 }
 
 function toast(title, body, onClick) {
@@ -144,9 +178,7 @@ async function loadJobs(more = false) {
 
 function card(job, flash = false) {
   const saved = !!state.saved[job.id];
-  const isNew = isFresh(job.posted_at) || (state.lastVisit && job.first_seen_at > state.lastVisit && isFresh(job.posted_at));
   const tags = [
-    isNew ? `<span class="tag new">NEW</span>` : "",
     `<span class="tag type">${esc(job.job_type)}</span>`,
     job.salary ? `<span class="tag pay">${esc(job.salary)}</span>` : "",
   ].join("");
@@ -158,7 +190,7 @@ function card(job, flash = false) {
       <div class="job-tags">${tags}</div>
     </div>
     <div class="job-side">
-      <span class="job-time">${esc(ago(job.posted_at))}</span>
+      ${freshBadge(job.posted_at)}
       <button class="star${saved ? " on" : ""}" data-star="${esc(job.id)}" aria-label="${saved ? "Unsave job" : "Save job"}">${saved ? "★" : "☆"}</button>
     </div>
   </article>`;
@@ -338,7 +370,7 @@ function detailHtml(job) {
     ["Job type", job.job_type],
     ["Experience", job.level],
     ["Work setting", job.remote ? "Remote" : "On-site or hybrid"],
-    ["Posted", `${ago(job.posted_at)} · ${posted}`],
+    ["Posted", posted, "", freshBadge(job.posted_at)],
   ];
   const facts = (job.facts || []).map((f) => `<li><span class="k">${esc(f.label)}</span><span>${esc(f.value)}</span></li>`).join("");
   return `
@@ -350,7 +382,7 @@ function detailHtml(job) {
       <button class="btn" data-star="${esc(job.id)}">${saved ? "★ Saved" : "☆ Save"}</button>
       <button class="btn" data-letter="${esc(job.id)}">Write cover letter</button>
     </div>
-    <div class="glance">${cells.map(([k, v, c]) => `<div class="cell ${c || ""}"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join("")}</div>
+    <div class="glance">${cells.map(([k, v, c, extra]) => `<div class="cell ${c || ""}"><div class="k">${k}</div><div class="v">${extra ? `${extra}<div class="vsub">${esc(v)}</div>` : esc(v)}</div></div>`).join("")}</div>
     ${facts ? `<p class="section-title">Highlights</p><ul class="facts">${facts}</ul>` : ""}
     <p class="section-title">About the job</p>
     <div class="desc">${formatDesc(job.description)}</div>
@@ -458,7 +490,34 @@ function liveText() {
   const s = Math.max(0, Math.round(serverNow - Math.max(...runs)));
   $("#live-text").textContent = `Live · updated ${s < 60 ? s + "s" : Math.round(s / 60) + "m"} ago`;
 }
+// ------------------------------------------------------------------ "Just posted" ticker
+const TICKER_MAX = 16;
+let tickerJobs = [];
+async function loadTicker() {
+  try {
+    const d = await getJSON("/api/jobs?limit=" + TICKER_MAX + "&facets=false");
+    tickerJobs = d.jobs;
+    renderTicker();
+  } catch { /* server restarting */ }
+}
+function tickItem(j, isNew) {
+  return `<button class="tick${isNew ? " in" : ""}" data-tick="${esc(j.id)}" title="${esc(j.title)} at ${esc(j.company)}">
+    ${logo(j, "tlogo")}<span class="tco">${esc(j.company)}</span><span class="ttl">${esc(j.title)}</span>${freshBadge(j.posted_at)}</button>`;
+}
+function renderTicker(newIds = new Set()) {
+  $("#ticker").innerHTML = tickerJobs.map((j) => tickItem(j, newIds.has(j.id))).join("");
+}
+function addToTicker(jobs) {
+  const fresh = jobs.filter((j) => !tickerJobs.some((t) => t.id === j.id))
+    .sort((a, b) => b.posted_at.localeCompare(a.posted_at));
+  if (!fresh.length) return;
+  tickerJobs = fresh.concat(tickerJobs).slice(0, TICKER_MAX);
+  renderTicker(new Set(fresh.map((j) => j.id)));
+  $("#ticker").scrollLeft = 0;
+}
+
 function onNewJobs(jobs) {
+  addToTicker(jobs);
   for (const job of jobs) for (const a of state.alerts) {
     if (!matches(job, a.f)) continue;
     a.hits = (a.hits || 0) + 1;
@@ -681,6 +740,8 @@ function bind() {
   document.addEventListener("click", (e) => {
     const star = e.target.closest("[data-star]");
     if (star) { e.stopPropagation(); toggleSave(star.dataset.star); return; }
+    const tk = e.target.closest("[data-tick]");
+    if (tk) { openJob(tk.dataset.tick); return; }
     const lt = e.target.closest("[data-letter]");
     if (lt) { startLetter(lt.dataset.letter); return; }
     if (e.target.closest("[data-close]")) { closeDetail(); return; }
@@ -743,6 +804,8 @@ function bind() {
   route();
   await loadMeta();
   connect();
+  loadTicker();
   setInterval(loadMeta, 30000);
+  setInterval(refreshBadges, 30000);
   setInterval(liveText, 5000);
 })();

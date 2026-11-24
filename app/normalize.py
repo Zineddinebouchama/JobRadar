@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .categorize import categorize
+from .logos import logo_url
 
 JOB_TYPES = [
     "Full-time", "Part-time", "Internship", "Apprenticeship",
@@ -147,8 +148,9 @@ def make_job(
         salary = extract_salary(description)
     if remote is None:
         remote = is_remote(location, title)
+    job_id = f"{source}:{native_id}"
     return {
-        "id": f"{source}:{native_id}",
+        "id": job_id,
         "source": source,
         "title": title,
         "company": (company or "Unknown").strip(),
@@ -161,7 +163,7 @@ def make_job(
         "salary": salary or None,
         "tags": tags,
         "url": url,
-        "logo": logo or None,
+        "logo": logo_url(job_id, logo or None),
         "posted_at": to_iso(posted_at),
         "description": description,
     }

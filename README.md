@@ -12,6 +12,9 @@ Most job sites show a role hours or days after the company posts it. PostedFresh
 - ~22,000 open listings from 1,100+ companies across 9 sources
 - New jobs appear at the top of the list automatically, with no refresh needed (Server-Sent Events)
 - Company career pages are checked every 45 seconds; closed postings are removed when a company takes them down
+- A **"Just posted" ticker** under the search bar slides in each new job the moment it's found
+- **Freshness badges** glow green for jobs posted minutes ago and fade to gray as a job ages
+- **Real company logos**, fetched once per company and cached on the server
 
 **Simple, accurate filters**
 - One search box with ranked, full-text search (SQLite FTS5)
@@ -66,6 +69,7 @@ flowchart LR
 | [`app/normalize.py`](app/normalize.py) | Maps every source onto one format: job type, experience level, remote, pay and highlights. |
 | [`app/categorize.py`](app/categorize.py) | Sorts jobs into 16 roles from the title, falling back to the source's own labels. |
 | [`app/db.py`](app/db.py) | SQLite storage with full-text search, per-job places and filter counts. |
+| [`app/logos.py`](app/logos.py) | Maps each watched company to its website and serves its logo, downloaded once and cached. |
 | [`app/letter.py`](app/letter.py) | Resume reading, skill matching, the cover letter builder and PDF output. |
 | [`static/`](static) | Plain HTML, CSS and JavaScript, with no build step. |
 

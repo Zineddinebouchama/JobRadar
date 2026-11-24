@@ -8,7 +8,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from . import locations
+from . import locations, logos
 from .config import DB_PATH
 
 _lock = threading.RLock()
@@ -106,6 +106,7 @@ def conn() -> sqlite3.Connection:
         ver = _conn.execute("SELECT value FROM meta WHERE key='locations_version'").fetchone()
         if not ver or ver[0] != LOCATIONS_VERSION:
             _rebuild_places(_conn)
+        _fill_logos(_conn)
         if fresh_fts:  # index jobs stored before full-text search existed
             _conn.execute("INSERT INTO jobs_fts(jobs_fts) VALUES ('rebuild')")
             _conn.commit()
@@ -129,6 +130,15 @@ def _rebuild_places(c: sqlite3.Connection) -> None:
         _set_places(c, job_id, location, bool(remote))
     c.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('locations_version', ?)", (LOCATIONS_VERSION,))
     c.commit()
+
+
+def _fill_logos(c: sqlite3.Connection) -> None:
+    """Give stored company-board jobs a logo link (new jobs get one when they arrive)."""
+    rows = c.execute("SELECT id FROM jobs WHERE logo IS NULL OR logo = ''").fetchall()
+    updates = [(url, jid) for (jid,) in rows if (url := logos.logo_url(jid, None))]
+    if updates:
+        c.executemany("UPDATE jobs SET logo=? WHERE id=?", updates)
+        c.commit()
 
 
 def now_iso() -> str:

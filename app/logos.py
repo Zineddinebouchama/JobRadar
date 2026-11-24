@@ -52,6 +52,38 @@ LOGO_DIR = config.DB_PATH.parent / "logos"
 _DOMAIN_RX = re.compile(r"^[a-z0-9.-]+\.[a-z]{2,}$")
 
 
+# Only legal endings are ignored; words like "Group" or "Labs" are part of the name.
+_LEGAL = re.compile(r"\b(inc|incorporated|llc|ltd|limited|corp|corporation|gmbh|ag|se|plc|sa|bv|nv|"
+                    r"ev|e\.v|pty|srl|kg|co\. kg)\b\.?", re.I)
+
+
+def name_key(name: str) -> str:
+    """'Abnormal Security, Inc.' and 'Abnormalsecurity' both become 'abnormalsecurity'."""
+    n = _LEGAL.sub(" ", (name or "").lower())
+    return re.sub(r"[^a-z0-9]+", "", n)
+
+
+async def lookup_domain(client: httpx.AsyncClient, company: str) -> str:
+    """Find a company's website from its name with a free public lookup. Only an exact
+    name match counts, so a company never gets someone else's logo. '' = not found."""
+    key = name_key(company)
+    if len(key) < 3:
+        return ""
+    r = await client.get("https://autocomplete.clearbit.com/v1/companies/suggest", params={"query": company}, timeout=10)
+    if r.status_code != 200:
+        raise httpx.HTTPError(f"lookup returned {r.status_code}")
+    for s in r.json()[:5]:
+        domain = (s.get("domain") or "").lower()
+        if name_key(s.get("name", "")) != key or not _DOMAIN_RX.match(domain):
+            continue
+        # The name must also be in the website address ("celonis" -> celonis.com),
+        # which rules out look-alike companies with different sites.
+        root = re.sub(r"[^a-z0-9]", "", domain.rsplit(".", 2)[0] if domain.count(".") >= 2 else domain.split(".")[0])
+        if key in root or root in key:
+            return domain
+    return ""
+
+
 def domain_for(job_id: str) -> str | None:
     """'greenhouse:stripe/123' -> 'stripe.com' (None for sources we can't map)."""
     source, _, rest = job_id.partition(":")

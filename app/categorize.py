@@ -49,6 +49,22 @@ CATEGORIES = [
     "Other",
 ]
 
+# The Role filter shows these groups, each expanding to its roles.
+ROLE_GROUPS = [
+    ("Tech", ["Software Engineering", "DevOps & Cloud", "Data Engineering", "Data Science & Machine Learning",
+              "Cybersecurity", "IT & Systems"]),
+    ("Business", ["Analyst", "Consulting", "Product Management", "Project & Program Management",
+                  "Operations & Strategy", "Finance & Accounting", "Legal & Compliance", "HR & Recruiting"]),
+    ("Sales & Marketing", ["Sales", "Account Management & Customer Success", "Marketing", "Communications & PR",
+                           "Writing & Content"]),
+    ("Creative", ["Design & Creative"]),
+    ("Engineering & Science", ["Hardware & Engineering", "Science & Research"]),
+    ("Healthcare & Education", ["Healthcare", "Education & Training", "Fitness & Wellness"]),
+    ("Hourly & Hands-on", ["Retail & Hospitality", "Customer Support", "Skilled Trades & Manufacturing",
+                           "Supply Chain & Logistics", "Facilities & Security Services", "Administrative"]),
+]
+assert sorted(r for _, rs in ROLE_GROUPS for r in rs) == sorted(c for c in CATEGORIES if c != "Other")
+
 # Order matters: the first matching rule wins.
 _RULES: list[tuple[str, str]] = [
     ("Retail & Hospitality",

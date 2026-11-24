@@ -17,8 +17,9 @@ import fcntl
 import logging
 import os
 import sys
+import time
 
-from . import config, db, feeds, poller
+from . import config, db, feeds, logos, poller
 from .sources import new_client, smartrecruiters_description
 
 log = logging.getLogger("postedfresh.worker")
@@ -86,10 +87,42 @@ async def _fill_details() -> None:
                 await asyncio.sleep(30)
 
 
+async def _fill_logos() -> None:
+    """Find logos for companies that came without one, gently (about one lookup a
+    second), and download every logo ahead of time so cards never sit blank."""
+    async with new_client() as client:
+        last_share = 0.0
+        while True:
+            names = []
+            try:
+                if time.time() - last_share > 120:  # sharing touches many rows; do it every couple of minutes
+                    shared = await asyncio.to_thread(db.share_logos)
+                    last_share = time.time()
+                    if shared:
+                        log.info("logos: %d jobs got a logo", shared)
+                names = await asyncio.to_thread(db.companies_needing_lookup, 120)
+                for name in names:
+                    try:
+                        domain = await logos.lookup_domain(client, name)
+                    except Exception as e:  # lookup unavailable: try again next round
+                        log.debug("logo lookup failed for %s: %s", name, e)
+                        break
+                    await asyncio.to_thread(db.remember_domain, name, domain)
+                    await asyncio.sleep(0.5)
+                for domain in await asyncio.to_thread(db.logo_domains):
+                    if not any((logos.LOGO_DIR / f"{domain}.{ext}").exists() for ext in ("png", "ico", "none")):
+                        await logos.get_logo(client, domain)
+                        await asyncio.sleep(0.3)
+            except Exception as e:
+                log.warning("logo filling failed: %s", e)
+            await asyncio.sleep(5 if names else 300)
+
+
 async def run(parent: int | None) -> None:
     db.conn()
     asyncio.create_task(asyncio.to_thread(db.reclassify_if_needed))
-    await asyncio.gather(poller.run_forever(), _fill_details(), _watch_parent(parent), _watch_refresh_requests())
+    await asyncio.gather(poller.run_forever(), _fill_details(), _fill_logos(), _watch_parent(parent),
+                         _watch_refresh_requests())
 
 
 def main() -> None:

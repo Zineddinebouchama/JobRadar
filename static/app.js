@@ -59,19 +59,12 @@ function tint(name) {
 function initials(name) {
   return (name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 }
+// Colored initials are always there; a logo covers them once it has loaded,
+// so a card is never an empty box while waiting.
 function logo(job, cls = "logo") {
   const [bg, ink] = tint(job.company);
-  const fb = esc(initials(job.company));
-  if (!job.logo) return `<div class="${cls}" style="background:${bg};color:${ink}">${fb}</div>`;
-  return `<div class="${cls} has-img" data-bg="${bg}" data-ink="${ink}" data-fb="${fb}"><img src="${esc(job.logo)}" alt="" loading="lazy" onerror="logoFailed(this)"></div>`;
-}
-// A logo that fails to load becomes colored initials.
-function logoFailed(img) {
-  const box = img.parentNode;
-  box.className = box.className.replace(" has-img", "");
-  box.style.background = box.dataset.bg;
-  box.style.color = box.dataset.ink;
-  box.textContent = box.dataset.fb;
+  const img = job.logo ? `<img src="${esc(job.logo)}" alt="" loading="lazy" onload="this.classList.add('ok')" onerror="this.remove()">` : "";
+  return `<div class="${cls}" style="background:${bg};color:${ink}"><span>${esc(initials(job.company))}</span>${img}</div>`;
 }
 
 function toast(title, body, onClick) {
@@ -224,6 +217,7 @@ function summaryText(key) {
   if (key === "remote") return f.remote !== "any" ? REMOTE.find((r) => r[0] === f.remote)?.[1] : "";
   if (key === "extras") { const n = (f.salary_only ? 1 : 0) + (f.visa ? 1 : 0) + (f.no_degree ? 1 : 0); return n === 1 ? (f.visa ? "Visa" : f.no_degree ? "No degree" : "Pay") : n ? `${n} selected` : ""; }
   const v = f[key] || [];
+  if (key === "category" && v.length) return roleLabel(v);
   return v.length === 1 ? v[0] : v.length ? `${v.length} selected` : "";
 }
 
@@ -259,13 +253,36 @@ function renderFilters() {
   $("#clear-all").classList.toggle("hidden", !n);
   $("#filter-count").textContent = n ? `(${n})` : "";
 }
+const openGroups = new Set();
 function renderRoles() {
   const cats = Object.fromEntries(state.facets.category || []);
   const term = fold($("#category-search").value);
-  const all = [...(state.meta?.categories || [])].filter((c) => c !== "Other").sort((a, b) => (cats[b] || 0) - (cats[a] || 0));
-  if (cats.Other) all.push("Other");  // "Other" always last
-  const shown = all.filter((c) => !term || fold(c).includes(term));
-  $("#category-opts").innerHTML = checkList("category", state.facets.category || [], shown) || `<div class="combo-empty">No roles found</div>`;
+  const sel = state.f.category;
+  let html = "";
+  for (const [group, roles] of state.meta?.role_groups || []) {
+    const shown = roles.filter((r) => !term || fold(r).includes(term) || fold(group).includes(term));
+    if (!shown.length) continue;
+    const total = roles.reduce((n, r) => n + (cats[r] || 0), 0);
+    const picked = roles.filter((r) => sel.includes(r)).length;
+    const open = term || openGroups.has(group) || (picked && picked < roles.length);
+    const state_ = picked === roles.length ? "checked" : "";
+    html += `<div class="rgroup${open ? " open" : ""}">
+      <div class="opt rhead"><input type="checkbox" data-group="${esc(group)}" ${state_} ${picked && picked < roles.length ? 'data-partial="1"' : ""} aria-label="All ${esc(group)} roles">
+        <button class="rtoggle" data-toggle="${esc(group)}" aria-expanded="${open ? "true" : "false"}"><span class="name">${esc(group)}</span>
+        <span class="n">${num(total)}</span><svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg></button></div>
+      ${open ? `<div class="rroles">${checkList("category", state.facets.category || [], shown.slice().sort((a, b) => (cats[b] || 0) - (cats[a] || 0)))}</div>` : ""}
+    </div>`;
+  }
+  if (!term || "other".includes(term)) html += checkList("category", state.facets.category || [], ["Other"]);
+  $("#category-opts").innerHTML = html || `<div class="combo-empty">No roles found</div>`;
+  $$('#category-opts input[data-partial]').forEach((el) => (el.indeterminate = true));
+}
+// A whole group of roles picked shows as the group's name.
+function roleLabel(roles) {
+  for (const [group, members] of state.meta?.role_groups || []) {
+    if (members.length > 1 && members.every((r) => roles.includes(r)) && roles.length === members.length) return group;
+  }
+  return roles.length === 1 ? roles[0] : `${roles.length} roles`;
 }
 function renderCompanies() {
   const term = fold($("#company-search").value);
@@ -276,7 +293,20 @@ function renderCompanies() {
 
 function renderActive() {
   const f = state.f, chips = [];
-  for (const k of MULTI) for (const v of f[k]) chips.push([k, v, v]);
+  for (const k of MULTI) {
+    if (k === "category") {
+      let rest = [...f.category];
+      for (const [group, members] of state.meta?.role_groups || []) {
+        if (members.length > 1 && members.every((r) => rest.includes(r))) {
+          chips.push(["rolegroup", group, group]);
+          rest = rest.filter((r) => !members.includes(r));
+        }
+      }
+      for (const v of rest) chips.push([k, v, v]);
+      continue;
+    }
+    for (const v of f[k]) chips.push([k, v, v]);
+  }
   if (f.posted_within_hours !== "0") chips.push(["posted_within_hours", "", summaryText("posted")]);
   if (f.remote !== "any") chips.push(["remote", "", summaryText("remote")]);
   if (f.salary_only) chips.push(["salary_only", "", "Lists pay"]);
@@ -737,7 +767,22 @@ function bind() {
   $("#category-search").addEventListener("input", renderRoles);
 
   // Filter checkboxes and radios
+  $("#category-opts").addEventListener("click", (e) => {
+    const t = e.target.closest("[data-toggle]");
+    if (!t) return;
+    const g = t.dataset.toggle;
+    openGroups.has(g) ? openGroups.delete(g) : openGroups.add(g);
+    renderRoles();
+  });
   $("#filters").addEventListener("change", (e) => {
+    const g = e.target.closest("input[data-group]");
+    if (g) {
+      const members = (state.meta?.role_groups || []).find(([name]) => name === g.dataset.group)?.[1] || [];
+      const rest = state.f.category.filter((r) => !members.includes(r));
+      state.f.category = g.checked ? [...rest, ...members] : rest;
+      apply();
+      return;
+    }
     const cb = e.target.closest("[data-f]");
     if (cb) { const k = cb.dataset.f; state.f[k] = cb.checked ? [...state.f[k], cb.value] : state.f[k].filter((v) => v !== cb.value); apply(); }
     const r = e.target.closest("[data-r]");
@@ -748,7 +793,10 @@ function bind() {
     const c = e.target.closest("[data-rm]");
     if (!c) return;
     const k = c.dataset.rm, v = c.dataset.v;
-    if (MULTI.includes(k)) state.f[k] = state.f[k].filter((x) => x !== v);
+    if (k === "rolegroup") {
+      const members = (state.meta?.role_groups || []).find(([g]) => g === v)?.[1] || [];
+      state.f.category = state.f.category.filter((r) => !members.includes(r));
+    } else if (MULTI.includes(k)) state.f[k] = state.f[k].filter((x) => x !== v);
     else state.f[k] = blank()[k];
     apply();
   });

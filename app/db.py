@@ -100,6 +100,13 @@ CREATE TRIGGER IF NOT EXISTS jobs_places_ad AFTER DELETE ON jobs BEGIN
 END;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 
+-- Company name -> website, found once by name lookup ('' = looked up, no confident match).
+CREATE TABLE IF NOT EXISTS company_domains (
+    company  TEXT PRIMARY KEY,          -- lowercase company name as shown on jobs
+    domain   TEXT NOT NULL,
+    checked  REAL NOT NULL
+);
+
 -- "Just posted" announcements from the collector, read by the website and pushed to browsers.
 CREATE TABLE IF NOT EXISTS events (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -184,6 +191,7 @@ def conn() -> sqlite3.Connection:
         _ensure_layout(_conn)
         _conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_workplace ON jobs(workplace)")
         _conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_ckey ON jobs(ckey)")
+        _conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_company_lower ON jobs(lower(company))")
         _conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_visible ON jobs(is_dup, posted_at DESC)")
         # Compact index with just the filter columns: counting reads this instead of whole rows.
         _conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_filters ON jobs(is_dup, job_type, category, level, workplace, "
@@ -420,6 +428,44 @@ def apply_details(job_id: str, description: str, location: str | None = None, ti
         ck = c.execute("SELECT ckey FROM jobs WHERE id=?", (job_id,)).fetchone()[0]
         _refresh_dups(c, {ck})
         c.commit()
+
+
+def share_logos() -> int:
+    """Give logo-less jobs a logo: from another job of the same company, or from a
+    website found by name lookup. Returns how many jobs got one."""
+    with _lock:
+        c = conn()
+        a = c.execute("""
+            UPDATE jobs SET logo = (SELECT j2.logo FROM jobs j2 WHERE lower(j2.company) = lower(jobs.company)
+                                    AND j2.logo IS NOT NULL AND j2.logo != '' LIMIT 1)
+            WHERE (logo IS NULL OR logo = '') AND lower(company) IN
+                  (SELECT lower(company) FROM jobs WHERE logo IS NOT NULL AND logo != '')""").rowcount
+        b = c.execute("""
+            UPDATE jobs SET logo = (SELECT '/api/logo/' || d.domain FROM company_domains d WHERE d.company = lower(jobs.company))
+            WHERE (logo IS NULL OR logo = '') AND lower(company) IN (SELECT company FROM company_domains WHERE domain != '')""").rowcount
+        c.commit()
+    return (a or 0) + (b or 0)
+
+
+def companies_needing_lookup(limit: int) -> list[str]:
+    """Companies with visible jobs but no logo, not looked up yet (biggest first)."""
+    return [r[0] for r in reader().execute("""
+        SELECT company FROM jobs WHERE is_dup = 0 AND (logo IS NULL OR logo = '')
+          AND lower(company) NOT IN (SELECT company FROM company_domains)
+        GROUP BY lower(company) ORDER BY COUNT(*) DESC LIMIT ?""", (limit,)).fetchall()]
+
+
+def remember_domain(company: str, domain: str) -> None:
+    with _lock:
+        conn().execute("INSERT OR REPLACE INTO company_domains (company, domain, checked) VALUES (?, ?, ?)",
+                       (company.strip().lower(), domain, time.time()))
+        conn().commit()
+
+
+def logo_domains() -> list[str]:
+    """Every website we show a logo for (to download them ahead of time)."""
+    return [r[0][len("/api/logo/"):] for r in reader().execute(
+        "SELECT DISTINCT logo FROM jobs WHERE logo LIKE '/api/logo/%' AND is_dup = 0").fetchall()]
 
 
 def get_meta_json(key: str, default=None):

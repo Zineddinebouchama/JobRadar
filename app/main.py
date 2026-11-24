@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import config, db, feeds, letter, logos, poller
-from .categorize import CATEGORIES
+from .categorize import CATEGORIES, ROLE_GROUPS
 from .normalize import JOB_TYPES, LEVELS, WORK_SETTINGS, extract_salary, key_facts
 from .sources import new_client, smartrecruiters_description
 
@@ -135,6 +135,7 @@ async def job_detail(job_id: str):
 async def meta():
     return {
         "categories": CATEGORIES,
+        "role_groups": ROLE_GROUPS,
         "job_types": JOB_TYPES,
         "levels": LEVELS,
         "work_settings": WORK_SETTINGS,

@@ -10,9 +10,10 @@ from .categorize import categorize
 from .logos import logo_url
 
 JOB_TYPES = [
-    "Full-time", "Part-time", "Internship", "Apprenticeship",
-    "Seasonal", "Temporary", "Contract",
+    "Full-time", "Part-time", "Internship", "Apprenticeship", "Fellowship",
+    "Seasonal", "Temporary", "Contract", "Freelance", "Volunteer",
 ]
+WORK_SETTINGS = ["Remote", "Hybrid", "On-site"]
 LEVELS = ["Internship", "Entry", "Mid", "Senior", "Manager", "Executive"]
 
 # Words that make a job an internship, in the languages our sources use.
@@ -35,10 +36,13 @@ _APPRENTICE = re.compile(r"apprentic|ausbildung|azubi|alternance|aprendiz|lehrli
 
 # Other job types: checked in the title first, then the source's own fields.
 _TYPE_RULES = [
+    ("Volunteer", r"\bvolunteer|ehrenamt|voluntari|bénévol|unpaid"),
+    ("Fellowship", r"fellowship|fellows program|residency program|\bresidency\b(?!.*(medical|physician|clinical))"),
+    ("Freelance", r"freelanc|independent contractor|\bgig\b|1099|self[- ]employed|auftragnehmer"),
     ("Seasonal", r"seasonal|holiday (help|season|staff)|summer (job|camp|staff|season|seasonal)|winter season|christmas|saisonal|temporada"),
     ("Part-time", r"part[- ]?time|teilzeit|minijob|temps partiel|tiempo parcial|deeltijd|meio período|\bpt\b|per diem|prn\b"),
     ("Temporary", r"\btemp\b|temporary|fixed[- ]term|befristet|interim|\blocum\b|\bcdd\b|maternity cover|parental leave cover"),
-    ("Contract", r"\bcontract\b|contractor|freelanc|1099|\bcontrato\b"),
+    ("Contract", r"\bcontract\b|contractor|\bcontrato\b|\bcdi\b"),
 ]
 _TYPE_RX = [(t, re.compile(p, re.I)) for t, p in _TYPE_RULES]
 _SOURCE_INTERN = re.compile(r"intern|internship|praktikum|stage|estágio|trainee", re.I)
@@ -63,6 +67,75 @@ _MID = re.compile(r"mid[- ]level|\bmid\b|intermediate|\blevel (ii|2)\b|\bii\b|pl
 _ENTRY = re.compile(r"junior|\bjr\.?\b|entry[- ]level|\bentry\b|new grad|graduate|early career|trainee|\blevel (i|1)\b|\bi\b$|"
                     r"\bassociates?\b(?! (director|manager|principal|partner|general counsel|vice))|assistants?\b|crew member|"
                     r"team member|cashier|barista|j[uú]nior", re.I)
+
+
+_REMOTE_RX = re.compile(r"\bremote\b|work from home|\bwfh\b|anywhere|fully distributed|home[- ]based|telecommut|"
+                        r"homeoffice|home office|télétravail|teletrabajo|trabalho remoto|zdaln", re.I)
+_HYBRID_RX = re.compile(r"\bhybrid\b|hybride|híbrido|hibrid|\d days? (a|per) week in (the )?office|in-office \d", re.I)
+
+
+def work_setting(remote: bool, *hints: Any) -> str:
+    """Remote, Hybrid or On-site, from the source's own field, the location and the title."""
+    text = " ".join(_flat(h) for h in hints)
+    if _HYBRID_RX.search(text):
+        return "Hybrid"
+    if remote:
+        return "Remote"
+    return "On-site"
+
+
+# Visa sponsorship, read sentence by sentence from the posting. Any sentence
+# about sponsorship that contains a negative ("not", "unable", "without", ...)
+# means it isn't offered; a clear "no" anywhere wins over a "yes" elsewhere.
+# A sentence may run across line breaks (postings often wrap mid-sentence), up to a few hundred characters.
+_SPONSOR_SENTENCE = re.compile(r"[^.!?]{0,300}(visa|h-?1b|work permit|immigration|work authori[sz]ation|authori[sz]ed to work)[^.!?]{0,300}", re.I)
+# It has to be about immigration AND about sponsoring/supporting it; "executive sponsors" doesn't count.
+_SPONSOR_TOPIC = re.compile(r"(visa|h-?1b|work permit|immigration)[^.!?]{0,80}(sponsor|support|assist|process|provid|offer|availab)|"
+                            r"(sponsor|support|assist|provid|offer)[^.!?]{0,80}(visa|h-?1b|work permit|immigration)|"
+                            r"authori[sz](ed|ation) to work[^.!?]{0,120}sponsor", re.I)
+_SPONSOR_YES = re.compile(r"(visa|h-?1b|work permit|immigration)[^.!?]{0,60}sponsor|sponsor[^.!?]{0,60}(visa|h-?1b|work permit|immigration)|"
+                          r"visa support|visa assistance|relocation (and|&) visa", re.I)
+_NEGATION = re.compile(r"\bnot\b|\bno\b|n't\b|\bunable\b|\bcannot\b|\bwithout\b|\bineligible\b|\bnor\b|\bnever\b|"
+                       r"\bunavailable\b|\bwill need to\b|\bmust (already )?(be|have) (authorized|eligible|legally)", re.I)
+
+
+def visa_sponsorship(description: str | None) -> str | None:
+    if not description:
+        return None
+    text = description[:15000]
+    low = text.lower()
+    if "sponsor" not in low and "visa" not in low and "h-1b" not in low and "h1b" not in low:
+        return None  # fast skip for most postings
+    # "U.S." and "e.g." shouldn't end a sentence ("...may not ... certain U.S. visa categories").
+    text = re.sub(r"\b(U\.S\.A|U\.S|U\.K|e\.g|i\.e|etc|approx|incl|Inc|Ltd|Co|St|No)\.", lambda m: m.group(1).replace(".", ""), text)
+    answer = None
+    for m in _SPONSOR_SENTENCE.finditer(text):
+        sentence = m.group(0)
+        if not _SPONSOR_TOPIC.search(sentence):
+            continue  # e.g. "Visa card" or a visa-free travel perk
+        if _NEGATION.search(sentence):
+            return "No"
+        if _SPONSOR_YES.search(sentence):
+            answer = "Yes"  # only an actual offer counts, not "visa letters" or "visa fees"
+    return answer
+
+
+# Only explicit statements count; "bachelor's or equivalent experience" still asks for a degree.
+_NO_DEGREE = re.compile(
+    r"no (college |university |4-year |four-year )?degree (is )?(required|needed|necessary)|"
+    r"degree (is )?not (required|needed|necessary)|(do|does) not (need|require) a (college |university )?degree|"
+    r"without a (college |university )?degree|high school diploma or (equivalent|ged)|\bged\b or (equivalent|high school)|"
+    r"high school (diploma|degree) (is )?(required|preferred)|no experience (or degree )?(required|necessary|needed)|"
+    r"kein (studium|abschluss) (erforderlich|notwendig)|sin (título|titulo) requerido", re.I)
+
+
+def no_degree_required(description: str | None) -> bool:
+    if not description:
+        return False
+    low = description[:15000].lower()
+    if "degree" not in low and "diploma" not in low and "ged" not in low and "studium" not in low and "título" not in low:
+        return False
+    return bool(_NO_DEGREE.search(low))
 
 
 def job_type(*hints: Any, title: str = "", description: str | None = None) -> str:
@@ -141,6 +214,19 @@ def html_to_text(raw: str | None, limit: int = 20000) -> str:
     return s[:limit]
 
 
+def _parse_date_only(s: str) -> str | None:
+    """'November 24, 2026' or '2026-11-24' -> the start of that day (UTC), never in the future.
+    Jobs with only a date are marked as day precision, so the site says "Today", not "just now"."""
+    for fmt in ("%B %d, %Y", "%b %d, %Y", "%Y-%m-%d", "%d %B %Y"):
+        try:
+            d = datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        return min(now, datetime(d.year, d.month, d.day, tzinfo=timezone.utc)).isoformat()
+    return None
+
+
 def to_iso(value: Any) -> str:
     """Accept epoch seconds/ms or ISO strings; return ISO-8601 UTC."""
     if value in (None, ""):
@@ -152,7 +238,11 @@ def to_iso(value: Any) -> str:
                 ts /= 1000
             dt = datetime.fromtimestamp(ts, tz=timezone.utc)
         else:
-            s = str(value).replace("Z", "+00:00")
+            s = str(value).strip()
+            date_only = _parse_date_only(s)
+            if date_only:
+                return date_only
+            s = s.replace("Z", "+00:00")
             dt = datetime.fromisoformat(s)
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
@@ -183,6 +273,16 @@ def salary_range(lo: Any, hi: Any, currency: str | None = "USD", period: str | N
     return out
 
 
+_GENDER_TAG = re.compile(r"\((m|f|w|d|h|x|div|all genders?|alle|f/m/x|m/w/d|w/m/d|m/f/d|h/f|f/h|k/m)[^)]*\)", re.I)
+
+
+def title_key(title: str) -> str:
+    """Normalized title for spotting duplicates: lowercase, no gender tags, punctuation or extra spaces."""
+    t = _GENDER_TAG.sub(" ", title or "").lower()
+    t = re.sub(r"[^\w]+", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
 def make_job(
     *,
     source: str,
@@ -201,6 +301,8 @@ def make_job(
     tags: list[str] | None = None,
     logo: str | None = None,
     description: str | None = None,
+    workplace_hint: Any = None,
+    posted_precision: str = "time",
 ) -> dict[str, Any]:
     title = (title or "").strip()
     dept = (department or "").strip() or None
@@ -219,6 +321,9 @@ def make_job(
         "department": dept,
         "location": location or ("Remote" if remote else None),
         "remote": bool(remote),
+        "workplace": work_setting(bool(remote), workplace_hint, location, title),
+        "visa": visa_sponsorship(description),
+        "no_degree": no_degree_required(description),
         "category": categorize(title, [_flat(h) for h in (category_hints or [])] + [dept or ""] + tags),
         "job_type": (jt := job_type(*(type_hints or []), title=title, description=description)),
         "level": level(title, *(level_hints or []), job_type=jt),
@@ -227,6 +332,7 @@ def make_job(
         "url": url,
         "logo": logo_url(job_id, logo or None),
         "posted_at": to_iso(posted_at),
+        "posted_precision": posted_precision,
         "description": description,
     }
 

@@ -13,13 +13,14 @@ from .sources import SOURCES, new_client
 
 log = logging.getLogger("postedfresh.poller")
 
-# Seconds between checks for each source. Company boards are a single cheap
-# request each, so they are checked often; paginated feeds less often.
-INTERVALS = {
-    "greenhouse": 45, "lever": 45, "ashby": 45,
-    "remotive": 120, "remoteok": 120, "jobicy": 120, "himalayas": 120,
-    "arbeitnow": 180, "smartrecruiters": 300,
-}
+# A job counts as "just posted" (and is pushed to browsers) only if it was
+# published recently, so old postings found by a deep sweep aren't announced.
+ANNOUNCE_WITHIN = timedelta(hours=6)
+
+
+def _quick_every(name: str) -> int:
+    s = SOURCES[name]
+    return s.get("quick_every") or s.get("full_every") or config.POLL_INTERVAL_SECONDS
 
 
 class Hub:
@@ -48,18 +49,19 @@ hub = Hub()
 
 status: dict[str, dict[str, Any]] = {
     name: {"label": s["label"], "kind": s["kind"], "boards": s.get("boards"), "last_run": None,
-           "last_ok": None, "count": 0, "new_last_run": 0, "error": None, "interval": INTERVALS.get(name, 300),
-           "next_run": None, "running": False}
+           "last_ok": None, "count": 0, "new_last_run": 0, "error": None, "interval": s.get("quick_every") or s.get("full_every"),
+           "full_every": s.get("full_every"), "last_full": None, "next_run": None, "running": False}
     for name, s in SOURCES.items()
 }
 
 
-async def poll_source(name: str, client) -> int:
+async def poll_source(name: str, client, mode: str = "full") -> int:
     st = status[name]
     st["running"] = True
     started = time.time()
     try:
-        result = await SOURCES[name]["fetch"](client)
+        fetch = SOURCES[name]["quick"] if mode == "quick" and SOURCES[name].get("quick") else SOURCES[name]["fetch"]
+        result = await fetch(client)
         jobs, alive = result if isinstance(result, tuple) else (result, {})
         jobs = [j for j in jobs if j.get("url") and j.get("title")]
         if name not in db.CLOSURE_TRACKED:  # feeds: skip stale postings the janitor would prune
@@ -74,19 +76,33 @@ async def poll_source(name: str, client) -> int:
             if ids:  # an empty list usually means a hiccup, not "every job closed"
                 closed += await asyncio.to_thread(db.remove_closed, prefix, ids)
         st["closed_last_run"] = closed
-        st.update(count=sum(len(v) for v in alive.values()) if alive else len(jobs), new_last_run=len(new), error=None, last_ok=time.time())
-        # Don't push old postings we merely (re)discovered, e.g. after downtime.
-        recent_cutoff = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
-        new = [j for j in new if j["posted_at"] >= recent_cutoff] if had_baseline else new
+        if alive:
+            st["count"] = sum(len(v) for v in alive.values())
+        else:
+            st["count"] = await asyncio.to_thread(_source_count, name)
+        st.update(new_last_run=len(new), error=None, last_ok=time.time())
+        if mode == "full":
+            st["last_full"] = time.time()
+        # A day-only job that appears during a quick check is genuinely new: we saw it
+        # within about a minute of it going up, so its time becomes the moment we saw it.
+        if mode == "quick" and had_baseline:
+            fresh_day = [j for j in new if j.get("posted_precision") == "day"]
+            await asyncio.to_thread(db.confirm_fresh, [j["id"] for j in fresh_day])
+            for j in fresh_day:
+                j["posted_at"], j["posted_precision"] = j["first_seen_at"], "time"
+        # Only announce jobs that were actually published recently, with a real time.
+        recent_cutoff = (datetime.now(timezone.utc) - ANNOUNCE_WITHIN).isoformat()
+        new = ([j for j in new if j["posted_at"] >= recent_cutoff and j.get("posted_precision", "time") == "time"]
+               if had_baseline else new)
         if new and had_baseline:
             new.sort(key=lambda j: j["posted_at"], reverse=True)
-            hub.publish({
+            await asyncio.to_thread(db.add_event, {
                 "type": "new_jobs",
                 "source": name,
                 "count": len(new),
                 "jobs": [_brief(j) for j in new[:50]],
             })
-        log.info("%s: %d jobs, %d new (%.1fs)", name, len(jobs), len(new), time.time() - started)
+        log.info("%s %s: %d jobs, %d new (%.1fs)", name, mode, len(jobs), len(new), time.time() - started)
         return len(new)
     except Exception as e:
         st["error"] = f"{type(e).__name__}: {e}"[:300]
@@ -95,6 +111,21 @@ async def poll_source(name: str, client) -> int:
     finally:
         st["running"] = False
         st["last_run"] = time.time()
+        await asyncio.to_thread(_save_status)
+
+
+def _save_status() -> None:
+    """Share each source's health with the website (it runs in another process)."""
+    try:
+        db.set_meta_json("source_status", {k: {kk: vv for kk, vv in v.items() if kk != "running"}
+                                           for k, v in status.items()})
+    except Exception as e:  # status is nice-to-have; never let it break collecting
+        log.warning("saving status failed: %s", e)
+
+
+def _source_count(name: str) -> int:
+    with db._lock:
+        return db.conn().execute("SELECT COUNT(*) FROM jobs WHERE source=?", (name,)).fetchone()[0]
 
 
 def _source_has_rows(name: str) -> bool:
@@ -103,16 +134,21 @@ def _source_has_rows(name: str) -> bool:
 
 
 def _brief(j: dict[str, Any]) -> dict[str, Any]:
-    keys = ("id", "source", "title", "company", "department", "location", "location_display", "remote", "category",
+    keys = ("id", "source", "title", "company", "department", "location", "location_display", "remote", "workplace",
+            "visa", "no_degree", "posted_precision", "category",
             "job_type", "level", "salary", "url", "logo", "posted_at", "first_seen_at")
     return {k: j.get(k) for k in keys}
 
 
 async def _loop(name: str, client) -> None:
+    """Quick checks for the newest jobs on a short cycle; a full sweep whenever it's due."""
+    src = SOURCES[name]
     while True:
-        await poll_source(name, client)
-        interval = INTERVALS.get(name, config.POLL_INTERVAL_SECONDS)
-        status[name]["next_run"] = time.time() + interval
+        st = status[name]
+        due_full = not src.get("quick") or st["last_full"] is None or time.time() - st["last_full"] >= src["full_every"]
+        await poll_source(name, client, "full" if due_full else "quick")
+        interval = _quick_every(name)
+        st["next_run"] = time.time() + interval
         await asyncio.sleep(interval)
 
 

@@ -252,9 +252,36 @@ class Place:
     area: str | None = None      # "Europe", "Worldwide", ...
 
 
+_REGION_NAMES = sorted({_fold(n): n for d in (US_STATES, CA_PROVINCES, AU_STATES) for n in d.values()}.items(),
+                       key=lambda kv: -len(kv[0]))
+
+
+def _add_commas(segment: str) -> str:
+    """'New York City New York United States' -> 'New York City, New York, United States'
+    (Workday writes locations without commas)."""
+    seg = re.sub(r"\s+", " ", segment).strip()
+    if "," in seg or not seg:
+        return seg
+    low = _fold(seg)
+    parts: list[str] = []
+    for name in sorted(COUNTRY_LOOKUP, key=len, reverse=True):
+        if len(name) > 3 and low.endswith(" " + name):
+            seg, low = seg[: -len(name)].strip(), low[: -len(name)].strip()
+            parts.insert(0, COUNTRY_LOOKUP[name])
+            break
+    for folded, name in _REGION_NAMES:
+        if low.endswith(" " + folded) and len(low) > len(folded) + 1:
+            seg, low = seg[: -len(folded)].strip(), low[: -len(folded)].strip()
+            parts.insert(0, name)
+            break
+    return ", ".join([seg] + parts) if parts else seg
+
+
 def parse(raw: str | None) -> list[Place]:
     if not raw:
         return []
+    if ";" in raw or ("," not in raw and len(raw.split()) >= 3):
+        raw = "; ".join(_add_commas(seg) for seg in raw.split(";"))
     if "Ã" in raw:  # text that was decoded with the wrong encoding ("MÃ¼nchen")
         try:
             raw = raw.encode("latin-1").decode("utf-8")
@@ -300,6 +327,11 @@ def parse(raw: str | None) -> list[Place]:
             if not country and not city and f not in AREAS:
                 continue
         if country and not (city and country == city.country and city.name != country and nxt and _match_region(nxt)):
+            if pending and pending.city and pending.country and pending.country != country and pending.region:
+                # "Schiphol-Rijk, NH, Netherlands": the explicit country beats a guessed US state code.
+                pending.country, pending.region = country, None
+                flush()
+                continue
             if pending and pending.city:
                 if not pending.country or pending.country == country or pending.region is None:
                     pending.country = country
@@ -388,6 +420,9 @@ def display(places: list[Place], remote: bool, raw: str | None) -> str:
     """A short, consistent location line for job cards."""
     if not places:
         cleaned = (raw or "").strip()
+        m = re.fullmatch(r"(\d+) locations?", cleaned, re.I)
+        if m:
+            return f"{m.group(1)} locations"
         if remote:
             return "Remote"
         return cleaned if cleaned and cleaned.lower() not in ("none", "hybrid", "n/a") else "Location not listed"

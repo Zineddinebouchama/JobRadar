@@ -1,17 +1,19 @@
 # PostedFresh
 
-**Fresh job listings from 1,100+ company career pages, on your screen within a minute of being posted. Free to use.**
+**Fresh job listings from thousands of employers, from Target and CVS to OpenAI and Stripe, on your screen within a minute of being posted. Free to use.**
 
 ![PostedFresh job board](docs/jobs.jpg)
 
-Most job sites show a role hours or days after the company posts it. PostedFresh watches companies' own career pages directly (Greenhouse, Lever, Ashby and SmartRecruiters), along with five public job boards. It checks them every 45 seconds and pushes new postings to every open browser the moment they appear.
+Most job sites show a role hours or days after the company posts it. PostedFresh watches employers' own career sites directly (Greenhouse, Lever, Ashby, SmartRecruiters, Workday and Amazon), along with five public job boards. The newest postings are checked every 45–90 seconds and pushed to every open browser the moment they appear.
 
 ## Features
 
 **Live job feed**
-- ~22,000 open listings from 1,100+ companies across 9 sources
+- Tens of thousands of open listings from thousands of companies across 11 sources, including big employers students look for, like Target, CVS Health, Home Depot, Nike, Nordstrom, T-Mobile, Amazon and the major banks
+- Every source gets a **quick check for its newest jobs about once a minute**, plus a deeper sweep; the biggest feeds (120,000+ remote jobs on Himalayas, 10,000 at Amazon) are filled in gradually so no server is overloaded
 - New jobs appear at the top of the list automatically, with no refresh needed (Server-Sent Events)
-- Company career pages are checked every 45 seconds; closed postings are removed when a company takes them down
+- Closed postings are removed when a company takes them down, and **duplicates are hidden**: a job listed twice, or on both a company site and a job board, shows once (the company's own listing wins)
+- **Honest freshness:** sources that only give a date show "Today" or "Yesterday"; the green "just posted" badge is only for jobs PostedFresh actually saw appear
 - A **"Just posted" ticker** under the search bar slides in each new job the moment it's found
 - **Freshness badges** glow green for jobs posted minutes ago and fade to gray as a job ages
 - **Real company logos**, fetched once per company and cached on the server
@@ -21,7 +23,9 @@ Most job sites show a role hours or days after the company posts it. PostedFresh
 - A filter sidebar with collapsible sections: location, date posted, job type, role, experience, work setting, company and pay
 - **31 roles** to find your niche, from Analyst, Consulting, Product Management and Project & Program Management to Data Engineering, Cybersecurity, Skilled Trades, Healthcare, Retail & Hospitality and Fitness & Wellness, each searchable
 - **Accurate job types:** the title decides, so new-grad, early-career and graduate-program jobs are filed as full-time entry-level roles, never as internships, while real internships are recognized in ten languages
-- **Job types:** Full-time, Part-time, Internship, Apprenticeship, Seasonal, Temporary, Contract
+- **Job types:** Full-time, Part-time, Internship, Apprenticeship, Fellowship, Seasonal, Temporary, Contract, Freelance, Volunteer
+- **Work setting:** Remote, Hybrid or On-site
+- **Requirements & pay:** jobs that list pay, jobs that **offer visa sponsorship** (read sentence by sentence, so "we can't sponsor" never counts as yes), and jobs where **no degree is required**
 - **Location** is a searchable dropdown. Messy location text from every source ("New York, NY (HQ)", "US-CA-Menlo Park", "bangalore, , India") is cleaned into city, state and country, so choosing "Texas, USA" finds every job in any Texas city.
 - Filters live in the URL, so any search can be bookmarked or shared
 
@@ -65,6 +69,8 @@ flowchart LR
 
 | File | What it does |
 |---|---|
+| [`app/worker.py`](app/worker.py) | The collector: runs next to the website as its own process (started automatically), so reading thousands of postings never slows down a visitor's search. It saves jobs, "just posted" announcements and source health to the database, which the website reads. |
+| [`app/feeds.py`](app/feeds.py) | The large sources (Himalayas, Arbeitnow, Jobicy, Amazon and 35 employers on Workday), each with a once-a-minute check for the newest jobs and a sweep that continues where it left off. |
 | [`app/sources.py`](app/sources.py) | One fetcher per source. Greenhouse uses a light "list only" request each cycle and fetches full details only for new jobs, so a check of all 71 companies takes about a second. |
 | [`app/poller.py`](app/poller.py) | One loop per source on its own schedule. It finds new and closed jobs and pushes new ones to browsers. |
 | [`app/locations.py`](app/locations.py) | Parses messy location text into city, state/region and country (about 95% of listings), which powers the location dropdown. |
@@ -77,7 +83,8 @@ flowchart LR
 
 **Design choices**
 - **Company career pages over aggregators.** Companies publish there first, which is what makes PostedFresh early.
-- **Push, not refresh.** One server-side poller serves everyone, and browsers get new jobs over a single live connection.
+- **Push, not refresh.** One collector serves everyone, and browsers get new jobs over a single live connection.
+- **Collecting and serving are separate.** The website only answers visitors; typical searches over 60,000+ jobs return in well under half a second, with counts for popular views kept ready in advance.
 - **Free to run.** No paid APIs or keys: every feature runs on the server itself.
 - **No build step.** Anyone can read the frontend, and it deploys anywhere.
 
@@ -116,7 +123,7 @@ docker run -p 8000:8000 -v postedfresh-data:/data postedfresh
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/jobs` | Search with filters (`q`, `place`, `job_type`, `category`, `level`, `company` take `\|`-separated values; plus `remote`, `posted_within_hours`, `salary_only`, `sort`, `limit`, `offset`); returns jobs and filter counts |
+| `GET /api/jobs` | Search with filters (`q`, `place`, `job_type`, `category`, `level`, `company` take `\|`-separated values; plus `remote` (remote/hybrid/onsite), `posted_within_hours`, `salary_only`, `visa`, `no_degree`, `sort`, `limit`, `offset`); returns jobs and filter counts |
 | `GET /api/jobs/{id}` | One job, with description, pay and highlights |
 | `GET /api/stream` | Live updates: `{type: "new_jobs", jobs: [...]}` as they're found |
 | `GET /api/meta` | Stats, filter options and the status of each source |
@@ -131,6 +138,7 @@ docker run -p 8000:8000 -v postedfresh-data:/data postedfresh
 - Coverage is the set of watched companies and public job boards, not every job on the internet. LinkedIn and Indeed don't offer public access, so they aren't included.
 - Seasonal and apprenticeship roles come and go with the time of year.
 - Alerts notify you while PostedFresh is open in a browser tab.
+- Visa sponsorship and degree requirements are read from the posting text; many postings don't mention either, so those filters show only jobs that say so explicitly.
 - Roles, job types and experience levels are inferred from each posting, which is accurate for most jobs but not all.
 
 ## Tech

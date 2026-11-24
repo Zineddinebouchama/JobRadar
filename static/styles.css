@@ -194,7 +194,7 @@ select.input { appearance: none; padding-right: 32px; background: var(--panel) u
 .d-title { margin: 0; font-size: 20px; line-height: 1.3; letter-spacing: -.01em; }
 .d-company { color: var(--muted); margin-top: 3px; }
 .d-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 20px; }
-.glance { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 22px; }
+.glance { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 22px; }
 .glance .cell { background: var(--bg); border: 1px solid var(--line-2); border-radius: 10px; padding: 10px 12px; min-width: 0; }
 .glance .k { font-size: 11.5px; color: var(--muted); font-weight: 500; }
 .glance .v { font-weight: 600; font-size: 13.5px; margin-top: 2px; overflow-wrap: anywhere; }

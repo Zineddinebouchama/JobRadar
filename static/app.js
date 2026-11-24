@@ -23,18 +23,25 @@ function ago(iso) {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 // Freshness: bright green when just posted, fading to gray as the job ages.
-function freshness(iso) {
+function freshness(iso, precision = "time") {
+  if (precision === "day") {
+    // The source only gives a date, so say which day rather than guessing a time.
+    const days = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(new Date(iso).toDateString())) / 864e5);
+    if (days <= 0) return { level: 3, text: "Today" };
+    if (days === 1) return { level: 4, text: "Yesterday" };
+    return { level: days < 7 ? 4 : 5, text: days < 30 ? `${days}d ago` : new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" }) };
+  }
   const m = (Date.now() - new Date(iso).getTime()) / 60000;
   const level = m < 15 ? 1 : m < 60 ? 2 : m < 360 ? 3 : m < 1440 ? 4 : 5;
   return { level, text: ago(iso) };
 }
-function freshBadge(iso) {
-  const f = freshness(iso);
-  return `<span class="fresh f${f.level}" data-ts="${esc(iso)}">${f.level === 1 ? '<span class="pip"></span>' : ""}${esc(f.text)}</span>`;
+function freshBadge(iso, precision = "time") {
+  const f = freshness(iso, precision);
+  return `<span class="fresh f${f.level}" data-ts="${esc(iso)}" data-p="${precision}">${f.level === 1 ? '<span class="pip"></span>' : ""}${esc(f.text)}</span>`;
 }
 function refreshBadges() {
   $$(".fresh[data-ts]").forEach((el) => {
-    const f = freshness(el.dataset.ts);
+    const f = freshness(el.dataset.ts, el.dataset.p);
     el.className = `fresh f${f.level}`;
     el.innerHTML = (f.level === 1 ? '<span class="pip"></span>' : "") + esc(f.text);
   });
@@ -91,11 +98,11 @@ const jobPath = (id) => "/api/jobs/" + encodeURIComponent(id).replace(/%2F/g, "/
 // ------------------------------------------------------------------ state
 const MULTI = ["place", "job_type", "category", "level", "company"];
 const POSTED = [["0", "Any time"], ["1", "Past hour"], ["24", "Past 24 hours"], ["72", "Past 3 days"], ["168", "Past week"]];
-const REMOTE = [["any", "Any"], ["remote", "Remote"], ["onsite", "On-site or hybrid"]];
+const REMOTE = [["any", "Any"], ["remote", "Remote"], ["hybrid", "Hybrid"], ["onsite", "On-site"]];
 const PAGE = 30;
 
 const blank = () => ({ q: "", place: [], job_type: [], category: [], level: [], company: [],
-  remote: "any", posted_within_hours: "0", salary_only: false, sort: "newest" });
+  remote: "any", posted_within_hours: "0", salary_only: false, visa: false, no_degree: false, sort: "newest" });
 
 const state = {
   f: blank(), jobs: [], total: 0, facets: {}, meta: null, metaAt: 0,
@@ -112,6 +119,8 @@ function toParams(f) {
   if (f.remote !== "any") p.set("remote", f.remote);
   if (f.posted_within_hours !== "0") p.set("posted_within_hours", f.posted_within_hours);
   if (f.salary_only) p.set("salary_only", "true");
+  if (f.visa) p.set("visa", "true");
+  if (f.no_degree) p.set("no_degree", "true");
   if (f.sort !== "newest") p.set("sort", f.sort);
   return p;
 }
@@ -122,11 +131,13 @@ function fromParams(p) {
   if (p.get("remote")) f.remote = p.get("remote");
   if (p.get("posted_within_hours")) f.posted_within_hours = p.get("posted_within_hours");
   f.salary_only = p.get("salary_only") === "true";
+  f.visa = p.get("visa") === "true";
+  f.no_degree = p.get("no_degree") === "true";
   if (p.get("sort")) f.sort = p.get("sort");
   return f;
 }
 const activeCount = (f) => MULTI.reduce((n, k) => n + f[k].length, 0)
-  + (f.remote !== "any") + (f.posted_within_hours !== "0") + (f.salary_only ? 1 : 0);
+  + (f.remote !== "any") + (f.posted_within_hours !== "0") + (f.salary_only ? 1 : 0) + (f.visa ? 1 : 0) + (f.no_degree ? 1 : 0);
 
 // ------------------------------------------------------------------ routing
 const VIEWS = ["jobs", "saved", "letter", "about"];
@@ -180,6 +191,7 @@ function card(job, flash = false) {
   const saved = !!state.saved[job.id];
   const tags = [
     `<span class="tag type">${esc(job.job_type)}</span>`,
+    job.workplace === "Remote" || job.workplace === "Hybrid" ? `<span class="tag">${esc(job.workplace)}</span>` : "",
     job.salary ? `<span class="tag pay">${esc(job.salary)}</span>` : "",
   ].join("");
   return `<article class="job${job.id === state.selectedId ? " selected" : ""}${flash ? " flash" : ""}" data-id="${esc(job.id)}" tabindex="0">
@@ -190,7 +202,7 @@ function card(job, flash = false) {
       <div class="job-tags">${tags}</div>
     </div>
     <div class="job-side">
-      ${freshBadge(job.posted_at)}
+      ${freshBadge(job.posted_at, job.posted_precision)}
       <button class="star${saved ? " on" : ""}" data-star="${esc(job.id)}" aria-label="${saved ? "Unsave job" : "Save job"}">${saved ? "★" : "☆"}</button>
     </div>
   </article>`;
@@ -210,7 +222,7 @@ function summaryText(key) {
   if (key === "place") return f.place.length === 1 ? f.place[0] : f.place.length ? `${f.place.length} places` : "";
   if (key === "posted") return f.posted_within_hours !== "0" ? POSTED.find((p) => p[0] === f.posted_within_hours)?.[1] : "";
   if (key === "remote") return f.remote !== "any" ? REMOTE.find((r) => r[0] === f.remote)?.[1] : "";
-  if (key === "salary_only") return f.salary_only ? "Listed" : "";
+  if (key === "extras") { const n = (f.salary_only ? 1 : 0) + (f.visa ? 1 : 0) + (f.no_degree ? 1 : 0); return n === 1 ? (f.visa ? "Visa" : f.no_degree ? "No degree" : "Pay") : n ? `${n} selected` : ""; }
   const v = f[key] || [];
   return v.length === 1 ? v[0] : v.length ? `${v.length} selected` : "";
 }
@@ -239,6 +251,8 @@ function renderFilters() {
   $("#level-opts").innerHTML = checkList("level", F.level || [], [...(m.levels || [])]);
   renderCompanies();
   $("#salary-only").checked = state.f.salary_only;
+  $("#visa-only").checked = state.f.visa;
+  $("#nodegree-only").checked = state.f.no_degree;
   renderPlaceChips();
   for (const d of $$(".fgroup")) $(".sel", d).textContent = summaryText(d.dataset.group) || "";
   const n = activeCount(state.f);
@@ -266,6 +280,8 @@ function renderActive() {
   if (f.posted_within_hours !== "0") chips.push(["posted_within_hours", "", summaryText("posted")]);
   if (f.remote !== "any") chips.push(["remote", "", summaryText("remote")]);
   if (f.salary_only) chips.push(["salary_only", "", "Lists pay"]);
+  if (f.visa) chips.push(["visa", "", "Visa sponsorship"]);
+  if (f.no_degree) chips.push(["no_degree", "", "No degree required"]);
   $("#active-row").classList.toggle("hidden", !chips.length);
   $("#active-row").innerHTML = chips.map(([k, v, label]) =>
     `<button class="chip" data-rm="${k}" data-v="${esc(v)}">${esc(label)}<span class="x" aria-hidden="true">×</span><span class="sr-only">Remove filter</span></button>`).join("");
@@ -376,8 +392,10 @@ function detailHtml(job) {
     ["Location", job.location_display || job.location || "Not listed"],
     ["Job type", job.job_type],
     ["Experience", job.level],
-    ["Work setting", job.remote ? "Remote" : "On-site or hybrid"],
-    ["Posted", posted, "", freshBadge(job.posted_at)],
+    ["Work setting", job.workplace || (job.remote ? "Remote" : "On-site")],
+    ["Visa sponsorship", job.visa === "Yes" ? "Offered" : job.visa === "No" ? "Not offered" : "Not mentioned"],
+    ["Degree", job.no_degree ? "Not required" : "See requirements"],
+    ["Posted", posted, "", freshBadge(job.posted_at, job.posted_precision)],
   ];
   const facts = (job.facts || []).map((f) => `<li><span class="k">${esc(f.label)}</span><span>${esc(f.value)}</span></li>`).join("");
   return `
@@ -444,8 +462,12 @@ function matches(job, f) {
   if (f.q && !fold(f.q).split(/\s+/).every((t) => hay.includes(t))) return false;
   if (f.locText && !fold(job.location_display || job.location || "").includes(fold(f.locText))) return false;
   if (f.place?.length && !f.place.some((p) => fold(job.location_display || "").includes(fold(p.split(",")[0])))) return false;
-  if (f.remote === "remote" && !job.remote) return false;
-  if (f.remote === "onsite" && job.remote) return false;
+  const setting = job.workplace || (job.remote ? "Remote" : "On-site");
+  if (f.remote === "remote" && setting !== "Remote") return false;
+  if (f.remote === "hybrid" && setting !== "Hybrid") return false;
+  if (f.remote === "onsite" && setting !== "On-site") return false;
+  if (f.visa && job.visa !== "Yes") return false;
+  if (f.no_degree && !job.no_degree) return false;
   if (f.salary_only && !job.salary) return false;
   for (const k of ["job_type", "category", "level", "company"]) if (f[k]?.length && !f[k].includes(job[k])) return false;
   return true;
@@ -503,13 +525,13 @@ let tickerJobs = [];
 async function loadTicker() {
   try {
     const d = await getJSON("/api/jobs?limit=" + TICKER_MAX + "&facets=false");
-    tickerJobs = d.jobs;
+    tickerJobs = d.jobs.sort(byNewest);
     renderTicker();
   } catch { /* server restarting */ }
 }
 function tickItem(j, isNew) {
   return `<button class="tick${isNew ? " in" : ""}" data-tick="${esc(j.id)}" title="${esc(j.title)} at ${esc(j.company)}">
-    ${logo(j, "tlogo")}<span class="tco">${esc(j.company)}</span><span class="ttl">${esc(j.title)}</span>${freshBadge(j.posted_at)}</button>`;
+    ${logo(j, "tlogo")}<span class="tco">${esc(j.company)}</span><span class="ttl">${esc(j.title)}</span>${freshBadge(j.posted_at, j.posted_precision)}</button>`;
 }
 function renderTicker(newIds = new Set()) {
   $("#ticker").innerHTML = tickerJobs.map((j) => tickItem(j, newIds.has(j.id))).join("");
@@ -518,7 +540,7 @@ function addToTicker(jobs) {
   const fresh = jobs.filter((j) => !tickerJobs.some((t) => t.id === j.id))
     .sort((a, b) => b.posted_at.localeCompare(a.posted_at));
   if (!fresh.length) return;
-  tickerJobs = fresh.concat(tickerJobs).slice(0, TICKER_MAX);
+  tickerJobs = fresh.concat(tickerJobs).sort(byNewest).slice(0, TICKER_MAX);
   renderTicker(new Set(fresh.map((j) => j.id)));
   $("#ticker").scrollLeft = 0;
 }
@@ -555,12 +577,20 @@ function serverMatches(job) {
   if (f.posted_within_hours !== "0") { /* new jobs are always within range */ }
   return matches(job, { ...f, place: [] });
 }
+// New jobs go where they belong by posting time, never just on top: a feed can
+// deliver a job hours after it was posted, and it shouldn't jump ahead of newer ones.
+const byNewest = (a, b) => b.posted_at.localeCompare(a.posted_at);
 function insertJobs(jobs) {
-  state.jobs = jobs.concat(state.jobs);
-  state.total += jobs.length;
-  if ($(".job-list .empty")) $("#job-list").innerHTML = "";
-  $("#job-list").insertAdjacentHTML("afterbegin", jobs.map((j) => card(j, true)).join(""));
-  $("#count").innerHTML = `<b>${num(state.total)}</b> jobs · <span style="color:var(--brand-ink)">${jobs.length} just posted</span>`;
+  const oldest = state.jobs.length ? state.jobs[state.jobs.length - 1].posted_at : "";
+  // Jobs older than everything already loaded will appear in place when the list is scrolled/loaded further.
+  const fit = jobs.filter((j) => !state.jobs.length || j.posted_at >= oldest || state.jobs.length >= state.total);
+  if (!fit.length) return;
+  const newIds = new Set(fit.map((j) => j.id));
+  state.jobs = fit.concat(state.jobs).sort(byNewest);
+  state.total += fit.length;
+  $("#job-list").innerHTML = state.jobs.map((j) => card(j, newIds.has(j.id))).join("");
+  const nowish = fit.filter((j) => Date.now() - new Date(j.posted_at).getTime() < 15 * 60e3).length;
+  $("#count").innerHTML = `<b>${num(state.total)}</b> jobs` + (nowish ? ` · <span style="color:var(--brand-ink)">${nowish} just posted</span>` : "");
 }
 function renderBanner() {
   const n = state.pending.length;
@@ -701,6 +731,8 @@ function bind() {
   $("#alert-btn").onclick = () => addAlert(JSON.parse(JSON.stringify(state.f)));
   $("#new-banner").onclick = () => { const j = state.pending; state.pending = []; renderBanner(); window.scrollTo({ top: 0 }); insertJobs(j); };
   $("#salary-only").onchange = (e) => { state.f.salary_only = e.target.checked; apply(); };
+  $("#visa-only").onchange = (e) => { state.f.visa = e.target.checked; apply(); };
+  $("#nodegree-only").onchange = (e) => { state.f.no_degree = e.target.checked; apply(); };
   $("#company-search").addEventListener("input", renderCompanies);
   $("#category-search").addEventListener("input", renderRoles);
 

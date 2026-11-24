@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=7" />
+  <link rel="stylesheet" href="/static/styles.css?v=10" />
 </head>
 <body>
   <header class="header">
@@ -110,10 +110,12 @@
           </div>
         </details>
 
-        <details class="fgroup" data-group="salary_only">
-          <summary>Pay <span class="sel"></span><svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg></summary>
+        <details class="fgroup" data-group="extras">
+          <summary>Requirements &amp; pay <span class="sel"></span><svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg></summary>
           <div class="fbody">
-            <label class="opt"><input type="checkbox" id="salary-only" /><span class="name">Only jobs that list pay</span></label>
+            <label class="opt"><input type="checkbox" id="salary-only" /><span class="name">Lists pay</span></label>
+            <label class="opt"><input type="checkbox" id="visa-only" /><span class="name">Visa sponsorship offered</span></label>
+            <label class="opt"><input type="checkbox" id="nodegree-only" /><span class="name">No degree required</span></label>
           </div>
         </details>
         <button class="btn primary drawer-done" id="drawer-done">Show jobs</button>
@@ -244,6 +246,6 @@
   </footer>
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
-  <script src="/static/app.js?v=7"></script>
+  <script src="/static/app.js?v=10"></script>
 </body>
 </html>

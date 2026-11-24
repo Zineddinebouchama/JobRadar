@@ -15,7 +15,7 @@ from typing import Any, Awaitable, Callable
 
 import httpx
 
-from . import config, db
+from . import config, db, feeds
 from .normalize import html_to_text, make_job, salary_range
 
 log = logging.getLogger("postedfresh.sources")
@@ -62,63 +62,6 @@ async def remoteok(client: httpx.AsyncClient) -> list[dict]:
         for j in data
         if isinstance(j, dict) and j.get("id") and j.get("position")
     ]
-
-
-async def jobicy(client: httpx.AsyncClient) -> list[dict]:
-    data = await _json(client, "https://jobicy.com/api/v2/remote-jobs", count=100)
-    return [
-        make_job(
-            source="jobicy", native_id=j["id"], title=html_to_text(j["jobTitle"]), company=j["companyName"],
-            url=j["url"], posted_at=j.get("pubDate"), location=j.get("jobGeo") or "Remote", remote=True,
-            type_hints=j.get("jobType"), level_hints=[j.get("jobLevel")], category_hints=j.get("jobIndustry"),
-            department=", ".join(j.get("jobIndustry") or []) or None,
-            salary=salary_range(j.get("annualSalaryMin"), j.get("annualSalaryMax"), j.get("salaryCurrency")),
-            logo=j.get("companyLogo"), description=html_to_text(j.get("jobDescription")),
-        )
-        for j in data.get("jobs", [])
-    ]
-
-
-async def himalayas(client: httpx.AsyncClient) -> list[dict]:
-    out: list[dict] = []
-    cursor = None
-    for _ in range(config.HIMALAYAS_PAGES):
-        params = {"limit": 20, **({"cursor": cursor} if cursor else {})}
-        data = await _json(client, "https://himalayas.app/jobs/api", **params)
-        for j in data.get("jobs", []):
-            locs = j.get("locationRestrictions") or []
-            out.append(make_job(
-                source="himalayas", native_id=j.get("guid"), title=j["title"], company=j["companyName"],
-                url=j.get("applicationLink") or j.get("guid"), posted_at=j.get("pubDate"),
-                location=("Remote — " + ", ".join(locs[:3])) if locs else "Remote (Worldwide)", remote=True,
-                type_hints=[j.get("employmentType")], level_hints=j.get("seniority"),
-                category_hints=(j.get("parentCategories") or []) + (j.get("categories") or []),
-                department=", ".join(j.get("parentCategories") or []) or None,
-                salary=salary_range(j.get("minSalary"), j.get("maxSalary"), j.get("currency"), j.get("salaryPeriod")),
-                tags=[c.replace("-", " ") for c in j.get("categories") or []], logo=j.get("companyLogo"),
-                description=html_to_text(j.get("description")),
-            ))
-        cursor = data.get("nextCursor")
-        if not cursor:
-            break
-    return out
-
-
-async def arbeitnow(client: httpx.AsyncClient) -> list[dict]:
-    out: list[dict] = []
-    for page in range(1, config.ARBEITNOW_PAGES + 1):
-        data = await _json(client, "https://www.arbeitnow.com/api/job-board-api", page=page)
-        for j in data.get("data", []):
-            out.append(make_job(
-                source="arbeitnow", native_id=j["slug"], title=j["title"], company=j["company_name"],
-                url=j["url"], posted_at=j.get("created_at"), location=j.get("location"),
-                remote=bool(j.get("remote")) or None, type_hints=j.get("job_types"),
-                category_hints=j.get("tags"), tags=j.get("tags"),
-                description=html_to_text(j.get("description")),
-            ))
-        if not (data.get("links") or {}).get("next"):
-            break
-    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -192,6 +135,7 @@ async def _lever_board(client: httpx.AsyncClient, board: str) -> list[dict]:
             source="lever", native_id=f"{board}/{j['id']}", title=j["text"], company=company_name(board),
             url=j.get("hostedUrl"), posted_at=j.get("createdAt"), location=cats.get("location"),
             remote=(j.get("workplaceType") == "remote") or None, department=cats.get("team") or cats.get("department"),
+            workplace_hint=j.get("workplaceType"),
             type_hints=[cats.get("commitment")], category_hints=[cats.get("team"), cats.get("department")],
             salary=salary_range(sal.get("min"), sal.get("max"), sal.get("currency"), sal.get("interval")),
             description=desc.strip()[:20000],
@@ -210,7 +154,7 @@ async def _ashby_board(client: httpx.AsyncClient, board: str) -> list[dict]:
             source="ashby", native_id=f"{board}/{j['id']}", title=j["title"], company=company_name(board),
             url=j.get("jobUrl"), posted_at=j.get("publishedAt"), location=j.get("location"),
             remote=(j.get("isRemote") or j.get("workplaceType") == "Remote") or None,
-            department=j.get("department"), type_hints=[j.get("employmentType")],
+            department=j.get("department"), type_hints=[j.get("employmentType")], workplace_hint=j.get("workplaceType"),
             category_hints=[j.get("department"), j.get("team")], salary=comp,
             description=(j.get("descriptionPlain") or "")[:20000],
         ))
@@ -234,6 +178,7 @@ async def _smartrecruiters_company(client: httpx.AsyncClient, company: str) -> l
                 url=f"https://jobs.smartrecruiters.com/{company}/{j['id']}",
                 posted_at=j.get("releasedDate"), location=loc.get("fullLocation") or loc.get("city"),
                 remote=bool(loc.get("remote")) or None, department=dept,
+            workplace_hint="hybrid" if loc.get("hybrid") else None,
                 type_hints=[(j.get("typeOfEmployment") or {}).get("label")],
                 level_hints=[(j.get("experienceLevel") or {}).get("label")],
                 category_hints=[(j.get("function") or {}).get("label"), (j.get("industry") or {}).get("label")],
@@ -243,6 +188,27 @@ async def _smartrecruiters_company(client: httpx.AsyncClient, company: str) -> l
         if not rows or offset >= data.get("totalFound", 0):
             break
     return out, None  # capped pagination: don't treat unseen ids as closed
+
+
+async def _smartrecruiters_newest(client: httpx.AsyncClient, company: str):
+    data = await _json(client, f"https://api.smartrecruiters.com/v1/companies/{company}/postings", limit=100, offset=0)
+    out = []
+    for j in data.get("content", []):
+        loc = j.get("location") or {}
+        dept = (j.get("department") or {}).get("label") or (j.get("function") or {}).get("label")
+        out.append(make_job(
+            source="smartrecruiters", native_id=f"{company}/{j['id']}", title=j["name"],
+            company=(j.get("company") or {}).get("name") or company,
+            url=f"https://jobs.smartrecruiters.com/{company}/{j['id']}",
+            posted_at=j.get("releasedDate"), location=loc.get("fullLocation") or loc.get("city"),
+            remote=bool(loc.get("remote")) or None, department=dept,
+            workplace_hint="hybrid" if loc.get("hybrid") else None,
+            type_hints=[(j.get("typeOfEmployment") or {}).get("label")],
+            level_hints=[(j.get("experienceLevel") or {}).get("label")],
+            category_hints=[(j.get("function") or {}).get("label"), (j.get("industry") or {}).get("label")],
+            description=None,
+        ))
+    return out, None
 
 
 async def smartrecruiters_description(client: httpx.AsyncClient, native_id: str) -> str:
@@ -281,16 +247,32 @@ def _per_company(fn, names: list[str], source: str) -> Fetcher:
     return run
 
 
+# quick: newest jobs only, run every `quick_every` seconds.
+# fetch: the full sweep, run every `full_every` seconds (company boards also
+# report which jobs are still open, so closed ones are removed).
 SOURCES: dict[str, dict[str, Any]] = {
-    "greenhouse": {"label": "Greenhouse", "kind": "Company boards", "fetch": _per_company(_greenhouse_board, config.GREENHOUSE_BOARDS, "greenhouse"), "boards": len(config.GREENHOUSE_BOARDS)},
-    "lever": {"label": "Lever", "kind": "Company boards", "fetch": _per_company(_lever_board, config.LEVER_BOARDS, "lever"), "boards": len(config.LEVER_BOARDS)},
-    "ashby": {"label": "Ashby", "kind": "Company boards", "fetch": _per_company(_ashby_board, config.ASHBY_BOARDS, "ashby"), "boards": len(config.ASHBY_BOARDS)},
-    "smartrecruiters": {"label": "SmartRecruiters", "kind": "Company boards", "fetch": _per_company(_smartrecruiters_company, config.SMARTRECRUITERS_COMPANIES, "smartrecruiters"), "boards": len(config.SMARTRECRUITERS_COMPANIES)},
-    "remotive": {"label": "Remotive", "kind": "Job board", "fetch": remotive, "homepage": "https://remotive.com"},
-    "remoteok": {"label": "Remote OK", "kind": "Job board", "fetch": remoteok, "homepage": "https://remoteok.com"},
-    "jobicy": {"label": "Jobicy", "kind": "Job board", "fetch": jobicy, "homepage": "https://jobicy.com"},
-    "himalayas": {"label": "Himalayas", "kind": "Job board", "fetch": himalayas, "homepage": "https://himalayas.app"},
-    "arbeitnow": {"label": "Arbeitnow", "kind": "Job board", "fetch": arbeitnow, "homepage": "https://www.arbeitnow.com"},
+    "greenhouse": {"label": "Greenhouse", "kind": "Company career pages", "boards": len(config.GREENHOUSE_BOARDS),
+                   "fetch": _per_company(_greenhouse_board, config.GREENHOUSE_BOARDS, "greenhouse"), "full_every": 45},
+    "lever": {"label": "Lever", "kind": "Company career pages", "boards": len(config.LEVER_BOARDS),
+              "fetch": _per_company(_lever_board, config.LEVER_BOARDS, "lever"), "full_every": 45},
+    "ashby": {"label": "Ashby", "kind": "Company career pages", "boards": len(config.ASHBY_BOARDS),
+              "fetch": _per_company(_ashby_board, config.ASHBY_BOARDS, "ashby"), "full_every": 45},
+    "smartrecruiters": {"label": "SmartRecruiters", "kind": "Company career pages", "boards": len(config.SMARTRECRUITERS_COMPANIES),
+                        "quick": _per_company(_smartrecruiters_newest, config.SMARTRECRUITERS_COMPANIES, "smartrecruiters"),
+                        "fetch": _per_company(_smartrecruiters_company, config.SMARTRECRUITERS_COMPANIES, "smartrecruiters"),
+                        "quick_every": 60, "full_every": 1200},
+    "workday": {"label": "Big employers (Workday)", "kind": "Company career pages", "boards": len(feeds.WORKDAY),
+                "quick": feeds.workday_quick, "fetch": feeds.workday_full, "quick_every": 90, "full_every": 180},
+    "amazon": {"label": "Amazon", "kind": "Company career pages", "boards": 1,
+               "quick": feeds.amazon_quick, "fetch": feeds.amazon_full, "quick_every": 60, "full_every": 180},
+    "himalayas": {"label": "Himalayas", "kind": "Job board", "quick": feeds.himalayas_quick, "fetch": feeds.himalayas_full,
+                  "quick_every": 60, "full_every": 120},
+    "arbeitnow": {"label": "Arbeitnow", "kind": "Job board", "quick": feeds.arbeitnow_quick, "fetch": feeds.arbeitnow_full,
+                  "quick_every": 60, "full_every": 900},
+    "jobicy": {"label": "Jobicy", "kind": "Job board", "quick": feeds.jobicy_quick, "fetch": feeds.jobicy_full,
+               "quick_every": 120, "full_every": 1800},
+    "remotive": {"label": "Remotive", "kind": "Job board", "fetch": remotive, "full_every": 120},
+    "remoteok": {"label": "Remote OK", "kind": "Job board", "fetch": remoteok, "full_every": 120},
 }
 
 

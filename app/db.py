@@ -76,6 +76,8 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 
 # Bump when the location parser changes so stored places are rebuilt.
 LOCATIONS_VERSION = "1"
+# Bump when the role / job type / level rules change so stored jobs are re-checked.
+CLASSIFY_VERSION = "3"
 
 FIELDS = [
     "title", "company", "department", "location", "remote", "category", "job_type",
@@ -106,6 +108,9 @@ def conn() -> sqlite3.Connection:
         ver = _conn.execute("SELECT value FROM meta WHERE key='locations_version'").fetchone()
         if not ver or ver[0] != LOCATIONS_VERSION:
             _rebuild_places(_conn)
+        ver = _conn.execute("SELECT value FROM meta WHERE key='classify_version'").fetchone()
+        if not ver or ver[0] != CLASSIFY_VERSION:
+            _reclassify(_conn)
         _fill_logos(_conn)
         if fresh_fts:  # index jobs stored before full-text search existed
             _conn.execute("INSERT INTO jobs_fts(jobs_fts) VALUES ('rebuild')")
@@ -129,6 +134,21 @@ def _rebuild_places(c: sqlite3.Connection) -> None:
     for job_id, location, remote in c.execute("SELECT id, location, remote FROM jobs").fetchall():
         _set_places(c, job_id, location, bool(remote))
     c.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('locations_version', ?)", (LOCATIONS_VERSION,))
+    c.commit()
+
+
+def _reclassify(c: sqlite3.Connection) -> None:
+    """Re-check every stored job's role, job type and experience level with the current rules."""
+    from .categorize import categorize
+    from .normalize import job_type, level
+
+    updates = []
+    rows = c.execute("SELECT id, title, department, tags, job_type, substr(description, 1, 8000) FROM jobs").fetchall()
+    for jid, title, dept, tags, old_type, desc in rows:
+        jt = job_type(old_type or "", title=title, description=desc)
+        updates.append((categorize(title, [dept or ""] + json.loads(tags or "[]")), jt, level(title, job_type=jt), jid))
+    c.executemany("UPDATE jobs SET category=?, job_type=?, level=? WHERE id=?", updates)
+    c.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('classify_version', ?)", (CLASSIFY_VERSION,))
     c.commit()
 
 

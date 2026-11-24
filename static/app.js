@@ -235,8 +235,7 @@ function renderFilters() {
   $("#posted-opts").innerHTML = radioList("posted_within_hours", POSTED, state.f.posted_within_hours);
   $("#remote-opts").innerHTML = radioList("remote", REMOTE, state.f.remote);
   $("#job_type-opts").innerHTML = checkList("job_type", F.job_type || [], [...(m.job_types || [])]);
-  const cats = Object.fromEntries(F.category || []);
-  $("#category-opts").innerHTML = checkList("category", F.category || [], [...(m.categories || [])].sort((a, b) => (cats[b] || 0) - (cats[a] || 0)));
+  renderRoles();
   $("#level-opts").innerHTML = checkList("level", F.level || [], [...(m.levels || [])]);
   renderCompanies();
   $("#salary-only").checked = state.f.salary_only;
@@ -245,6 +244,14 @@ function renderFilters() {
   const n = activeCount(state.f);
   $("#clear-all").classList.toggle("hidden", !n);
   $("#filter-count").textContent = n ? `(${n})` : "";
+}
+function renderRoles() {
+  const cats = Object.fromEntries(state.facets.category || []);
+  const term = fold($("#category-search").value);
+  const all = [...(state.meta?.categories || [])].filter((c) => c !== "Other").sort((a, b) => (cats[b] || 0) - (cats[a] || 0));
+  if (cats.Other) all.push("Other");  // "Other" always last
+  const shown = all.filter((c) => !term || fold(c).includes(term));
+  $("#category-opts").innerHTML = checkList("category", state.facets.category || [], shown) || `<div class="combo-empty">No roles found</div>`;
 }
 function renderCompanies() {
   const term = fold($("#company-search").value);
@@ -695,6 +702,7 @@ function bind() {
   $("#new-banner").onclick = () => { const j = state.pending; state.pending = []; renderBanner(); window.scrollTo({ top: 0 }); insertJobs(j); };
   $("#salary-only").onchange = (e) => { state.f.salary_only = e.target.checked; apply(); };
   $("#company-search").addEventListener("input", renderCompanies);
+  $("#category-search").addEventListener("input", renderRoles);
 
   // Filter checkboxes and radios
   $("#filters").addEventListener("change", (e) => {

@@ -19,6 +19,8 @@ Most job sites show a role hours or days after the company posts it. PostedFresh
 **Simple, accurate filters**
 - One search box with ranked, full-text search (SQLite FTS5)
 - A filter sidebar with collapsible sections: location, date posted, job type, role, experience, work setting, company and pay
+- **31 roles** to find your niche, from Analyst, Consulting, Product Management and Project & Program Management to Data Engineering, Cybersecurity, Skilled Trades, Healthcare, Retail & Hospitality and Fitness & Wellness, each searchable
+- **Accurate job types:** the title decides, so new-grad, early-career and graduate-program jobs are filed as full-time entry-level roles, never as internships, while real internships are recognized in ten languages
 - **Job types:** Full-time, Part-time, Internship, Apprenticeship, Seasonal, Temporary, Contract
 - **Location** is a searchable dropdown. Messy location text from every source ("New York, NY (HQ)", "US-CA-Menlo Park", "bangalore, , India") is cleaned into city, state and country, so choosing "Texas, USA" finds every job in any Texas city.
 - Filters live in the URL, so any search can be bookmarked or shared
@@ -67,7 +69,7 @@ flowchart LR
 | [`app/poller.py`](app/poller.py) | One loop per source on its own schedule. It finds new and closed jobs and pushes new ones to browsers. |
 | [`app/locations.py`](app/locations.py) | Parses messy location text into city, state/region and country (about 95% of listings), which powers the location dropdown. |
 | [`app/normalize.py`](app/normalize.py) | Maps every source onto one format: job type, experience level, remote, pay and highlights. |
-| [`app/categorize.py`](app/categorize.py) | Sorts jobs into 16 roles from the title, falling back to the source's own labels. |
+| [`app/categorize.py`](app/categorize.py) | Sorts jobs into 31 roles (Analyst, Consulting, Product Management, Project & Program Management, Data Engineering, Skilled Trades and more) from the title, with common terms in six languages, falling back to the team's own labels. |
 | [`app/db.py`](app/db.py) | SQLite storage with full-text search, per-job places and filter counts. |
 | [`app/logos.py`](app/logos.py) | Maps each watched company to its website and serves its logo, downloaded once and cached. |
 | [`app/letter.py`](app/letter.py) | Resume reading, skill matching, the cover letter builder and PDF output. |

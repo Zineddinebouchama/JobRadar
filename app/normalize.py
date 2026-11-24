@@ -15,27 +15,109 @@ JOB_TYPES = [
 ]
 LEVELS = ["Internship", "Entry", "Mid", "Senior", "Manager", "Executive"]
 
-# First match wins, so the most specific kinds come first. A "Summer Intern"
-# is an internship, a "Seasonal Part-time Associate" is seasonal.
+# Words that make a job an internship, in the languages our sources use.
+_INTERN = re.compile(
+    r"\bintern\b|\binterns\b|internship|\bco-?op\b|werkstudent|working student|studentische|praktik|praktyk|"
+    r"stagiaire|\bstage\b(?! \d)(?!.* (manager|engineer|lead|director))|estágio|estagi[aá]rio|pr[aá]cticas|practicante|"
+    r"pasante|becario|tirocin|stagiair|gyakornok|\bstaż\b|\bstaz\b|placement year|industrial placement|"
+    r"summer (analyst|associate|student)|student (assistant|worker|job|position)|thesis|abschlussarbeit|tesista|"
+    r"vacation scheme|externship|\b(masters?|mba|phd|undergrad\w*|student)?\s?summer 20\d\d\b",
+    re.I,
+)
+# Words that mean an early-career job that is NOT an internship.
+_EARLY_CAREER = re.compile(
+    r"new grad|new graduate|recent grad|early career|graduate (program|programme|scheme|engineer|analyst|trainee|"
+    r"specialist|associate|role|position|hire)|\bgraduate\b(?!.*intern)|trainee|management trainee|junior managers? program|"
+    r"rotational program|rotation program|entry[- ]level|university grad|college grad|campus hire|\bnew college\b",
+    re.I,
+)
+_APPRENTICE = re.compile(r"apprentic|ausbildung|azubi|alternance|aprendiz|lehrling|duales studium|dual study", re.I)
+
+# Other job types: checked in the title first, then the source's own fields.
 _TYPE_RULES = [
-    ("Apprenticeship", r"apprentic|ausbildung|azubi|alternance|aprendiz"),
-    ("Internship", r"\bintern\b|internship|co-?op\b|werkstudent|working student|praktik|stagiaire|\bstage (de|d'|en)\b|trainee|placement year|summer analyst|summer associate"),
-    ("Seasonal", r"seasonal|holiday (help|season)|summer (job|camp|staff|season)|winter season|christmas"),
-    ("Part-time", r"part[- ]?time|teilzeit|minijob|temps partiel|\bpt\b"),
-    ("Temporary", r"\btemp\b|temporary|fixed[- ]term|befristet|interim|\blocum\b"),
-    ("Contract", r"contract|contractor|freelanc|consultant \(contract\)|1099"),
-    ("Full-time", r"full[- ]?time|permanent|vollzeit|\bft\b|fulltime|regular"),
+    ("Seasonal", r"seasonal|holiday (help|season|staff)|summer (job|camp|staff|season|seasonal)|winter season|christmas|saisonal|temporada"),
+    ("Part-time", r"part[- ]?time|teilzeit|minijob|temps partiel|tiempo parcial|deeltijd|meio período|\bpt\b|per diem|prn\b"),
+    ("Temporary", r"\btemp\b|temporary|fixed[- ]term|befristet|interim|\blocum\b|\bcdd\b|maternity cover|parental leave cover"),
+    ("Contract", r"\bcontract\b|contractor|freelanc|1099|\bcontrato\b"),
 ]
 _TYPE_RX = [(t, re.compile(p, re.I)) for t, p in _TYPE_RULES]
+_SOURCE_INTERN = re.compile(r"intern|internship|praktikum|stage|estágio|trainee", re.I)
+_SOURCE_APPRENTICE = re.compile(r"apprentic", re.I)
+# A source's "internship" label is only trusted if the posting itself backs it up.
+_DESC_INTERN = re.compile(r"\bintern(ship)?s?\b|working student|werkstudent|praktik|estágio|\bstage\b|stagiaire|"
+                          r"gyakornok|staż|thesis|placement|current(ly)? (enrolled|student)|pursuing a (bachelor|master|degree)|"
+                          r"\bstudents?\b", re.I)
 
-_LEVEL_RULES = [
-    ("Internship", r"\bintern\b|internship|apprentic|werkstudent|working student|trainee|co-?op\b"),
-    ("Executive", r"\bchief\b|\bc[etofm]o\b|\bvp\b|vice president|\bsvp\b|\bevp\b|president|general manager|managing director"),
-    ("Manager", r"\bhead of\b|director|manager|\blead\b|team lead|supervisor"),
-    ("Senior", r"senior|\bsr\.?\b|staff|principal|expert|\blevel (iii|iv|3|4)\b|\biii\b|\biv\b"),
-    ("Entry", r"junior|\bjr\.?\b|entry|graduate|new grad|associate|assistant|\blevel (i|1)\b|crew member|team member|cashier|barista"),
-]
-_LEVEL_RX = [(t, re.compile(p, re.I)) for t, p in _LEVEL_RULES]
+_EXEC = re.compile(r"\bchief\b|\bc[etofm]o\b|\bcxo\b|\bvp\b|vice president|\bsvp\b|\bevp\b|\bpresident\b|managing director|"
+                   r"general manager|^(managing |general |senior |equity )?partner\b(?! (solutions|programs?|manager|marketing|success|development|sales|product|ecosystem|engineer))|"
+                   r"managing partner|founder", re.I)
+_MANAGER = re.compile(r"\bhead of\b|\bhead,|director|engineering manager|people manager|team lead|people lead|"
+                      r"supervisor|store manager|restaurant manager|shift manager|office manager|"
+                      r"\bmanager\b(?!.*\b(product|project|program|programme|account|relationship|customer success|partner|"
+                      r"case|portfolio|community|social media|content|campaign|category|territory)\b)(?<!product manager)"
+                      r"(?<!project manager)(?<!program manager)(?<!account manager)(?<!success manager)(?<!relationship manager)"
+                      r"(?<!partner manager)(?<!case manager)(?<!community manager)", re.I)
+_SENIOR = re.compile(r"senior|\bsr\.?\b|\bstaff\b|\blead\b(?!er)|tech lead|principal|\bexpert\b|\bdistinguished\b|\blevel (iii|iv|v|3|4|5)\b|"
+                     r"\b(iii|iv)\b|\bl[5-7]\b|\bsenior\b|leitend|s[eê]nior", re.I)
+_MID = re.compile(r"mid[- ]level|\bmid\b|intermediate|\blevel (ii|2)\b|\bii\b|pleno", re.I)
+_ENTRY = re.compile(r"junior|\bjr\.?\b|entry[- ]level|\bentry\b|new grad|graduate|early career|trainee|\blevel (i|1)\b|\bi\b$|"
+                    r"\bassociates?\b(?! (director|manager|principal|partner|general counsel|vice))|assistants?\b|crew member|"
+                    r"team member|cashier|barista|j[uú]nior", re.I)
+
+
+def job_type(*hints: Any, title: str = "", description: str | None = None) -> str:
+    """Pick the job type. The title always wins over the source's own fields,
+    because sources sometimes label new-grad and trainee programs as internships."""
+    hint_text = " ".join(_flat(h) for h in hints)
+    if _APPRENTICE.search(title):
+        return "Apprenticeship"
+    early = _EARLY_CAREER.search(title)
+    if _INTERN.search(title) and not (early and not re.search(r"\bintern|internship|co-?op", title, re.I)):
+        return "Internship"
+    for t, rx in _TYPE_RX:
+        if rx.search(title):
+            return t
+    # Nothing decisive in the title: use the source's own fields.
+    if _SOURCE_APPRENTICE.search(hint_text):
+        return "Apprenticeship"
+    stated_level = _EXEC.search(title) or _MANAGER.search(title) or _SENIOR.search(title) or _MID.search(title)
+    if (_SOURCE_INTERN.search(hint_text) and not early and not stated_level
+            and _DESC_INTERN.search((description or "")[:8000])):
+        return "Internship"
+    for t, rx in _TYPE_RX:
+        if rx.search(hint_text):
+            return t
+    return "Full-time"
+
+
+def level(title: str, *hints: Any, job_type: str = "") -> str:
+    """Experience level, from the title first. Product, project, account and
+    similar "manager" titles are individual roles, not people managers."""
+    if job_type == "Internship":
+        return "Internship"
+    t = title or ""
+    if _EXEC.search(t):
+        return "Executive"
+    if _MANAGER.search(t):
+        return "Manager"
+    if _SENIOR.search(t):
+        return "Senior"
+    if _ENTRY.search(t) or job_type == "Apprenticeship":
+        return "Entry"
+    if _MID.search(t):
+        return "Mid"
+    # Nothing in the title: use the source's level field if it maps cleanly.
+    h = " ".join(_flat(x) for x in hints).lower()
+    if re.search(r"executive|director|vp", h):
+        return "Executive" if re.search(r"executive|vp", h) else "Manager"
+    if re.search(r"manager|management", h):
+        return "Manager"
+    if re.search(r"senior|lead|expert|principal", h):
+        return "Senior"
+    if re.search(r"entry|junior|associate|graduate", h):
+        return "Entry"
+    return "Mid"
+
 
 _BLOCK_TAGS = re.compile(r"</?(p|div|br|li|ul|ol|h[1-6]|tr|section|article)[^>]*>", re.I)
 _LI_OPEN = re.compile(r"<li[^>]*>", re.I)
@@ -57,26 +139,6 @@ def html_to_text(raw: str | None, limit: int = 20000) -> str:
     s = "\n".join(line.strip() for line in s.splitlines())
     s = _NL.sub("\n\n", s).strip()
     return s[:limit]
-
-
-def job_type(*hints: Any, title: str = "") -> str:
-    """Pick the most specific job type from the title and any source type fields."""
-    text = " ".join([title] + [_flat(h) for h in hints])
-    for t, rx in _TYPE_RX:
-        if rx.search(text):
-            return t
-    return "Full-time"
-
-
-def level(title: str, *hints: Any) -> str:
-    for t, rx in _LEVEL_RX:
-        if rx.search(title or ""):
-            return t
-    text = " ".join(_flat(h) for h in hints)
-    for t, rx in _LEVEL_RX:
-        if rx.search(text):
-            return t
-    return "Mid"
 
 
 def to_iso(value: Any) -> str:
@@ -158,8 +220,8 @@ def make_job(
         "location": location or ("Remote" if remote else None),
         "remote": bool(remote),
         "category": categorize(title, [_flat(h) for h in (category_hints or [])] + [dept or ""] + tags),
-        "job_type": job_type(*(type_hints or []), title=title),
-        "level": level(title, *(level_hints or [])),
+        "job_type": (jt := job_type(*(type_hints or []), title=title, description=description)),
+        "level": level(title, *(level_hints or []), job_type=jt),
         "salary": salary or None,
         "tags": tags,
         "url": url,

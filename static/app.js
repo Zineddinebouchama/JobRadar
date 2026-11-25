@@ -134,22 +134,34 @@ const activeCount = (f) => MULTI.reduce((n, k) => n + f[k].length, 0)
 
 // ------------------------------------------------------------------ routing
 const VIEWS = ["jobs", "saved", "letter", "about"];
+let currentView = null, jobsScroll = 0;
 function route() {
-  const [path, query] = location.hash.replace(/^#\/?/, "").split("?");
+  let [path, query] = location.hash.replace(/^#\/?/, "").split("?");
   const view = VIEWS.includes(path) ? path : "jobs";
+  // Coming back to Jobs without filters in the address brings back the last ones used.
+  if (view === "jobs" && query === undefined && store.get("filters", "")) {
+    query = store.get("filters", "");
+    history.replaceState(null, "", "#/jobs?" + query);
+  }
+  if (currentView === "jobs" && view !== "jobs") jobsScroll = window.scrollY;
   for (const v of VIEWS) $("#view-" + v).classList.toggle("hidden", v !== view);
   $$(".nav a").forEach((a) => a.classList.toggle("active", a.dataset.view === view));
-  window.scrollTo(0, 0);
+  const returning = view === "jobs" && currentView !== null && currentView !== "jobs";
+  currentView = view;
   if (view === "jobs") {
     const next = fromParams(new URLSearchParams(query || ""));
-    if (JSON.stringify(next) !== JSON.stringify(state.f) || !state.jobs.length) { state.f = next; syncInputs(); loadJobs(); }
-  }
+    store.set("filters", toParams(next).toString());
+    if (JSON.stringify(next) !== JSON.stringify(state.f) || !state.jobs.length) {
+      state.f = next; syncInputs(); loadJobs(); window.scrollTo(0, 0);
+    } else window.scrollTo(0, returning ? jobsScroll : 0);  // same list: back where you were
+  } else window.scrollTo(0, 0);
   if (view === "saved") renderSaved();
   if (view === "letter") renderLetterJob();
   if (view === "about") renderSources();
 }
 function apply() {
   const qs = toParams(state.f).toString();
+  store.set("filters", qs);
   history.replaceState(null, "", "#/jobs" + (qs ? "?" + qs : ""));
   loadJobs();
 }

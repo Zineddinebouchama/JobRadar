@@ -161,15 +161,23 @@ async function loadJobs(more = false) {
   const p = toParams(state.f);
   p.set("limit", PAGE);
   p.set("offset", more ? state.jobs.length : 0);
-  if (more) p.set("facets", "false");
-  if (!more) $("#count").innerHTML = `<span class="spinner"></span>`;
+  p.set("facets", "false");
+  if (!more) {
+    $("#count").innerHTML = `<span class="spinner"></span>`;
+    // The counts beside each filter come separately, so the jobs show without waiting for them.
+    getJSON("/api/facets?" + toParams(state.f)).then((fc) => {
+      if (my !== seq) return;
+      state.facets = fc;
+      renderFilters();
+    }).catch(() => {});
+  }
   try {
     const d = await getJSON("/api/jobs?" + p);
     if (my !== seq) return;
     state.jobs = more ? state.jobs.concat(d.jobs) : d.jobs;
     state.total = d.total;
-    if (d.facets) state.facets = d.facets;
     renderJobs();
+    state.jobs.slice(0, 4).forEach((j) => jobDetails(j.id).catch(() => {}));
     if (!more) {
       state.pending = []; renderBanner(); renderFilters(); renderActive();
       if (window.innerWidth > 1180 && state.jobs.length && !state.jobs.some((j) => j.id === state.selectedId)) selectJob(state.jobs[0].id);
@@ -382,6 +390,14 @@ function renderPlaceChips() {
 }
 
 // ------------------------------------------------------------------ detail
+const details = new Map();
+function jobDetails(id) {
+  if (!details.has(id)) {
+    if (details.size > 300) details.delete(details.keys().next().value);
+    details.set(id, getJSON(jobPath(id)).catch((e) => { details.delete(id); throw e; }));
+  }
+  return details.get(id);
+}
 async function selectJob(id) {
   state.selectedId = id;
   $$(".job").forEach((el) => el.classList.toggle("selected", el.dataset.id === id));
@@ -391,7 +407,7 @@ async function selectJob(id) {
   body.classList.remove("hidden");
   body.innerHTML = `<div class="muted"><span class="spinner"></span> Loading…</div>`;
   try {
-    const job = await getJSON(jobPath(id));
+    const job = await jobDetails(id);
     if (state.selectedId !== id) return;
     state.selected = job;
     body.innerHTML = detailHtml(job);
@@ -769,6 +785,12 @@ function bind() {
   $("#category-search").addEventListener("input", renderRoles);
 
   // Filter checkboxes and radios
+  let hoverTimer;
+  $("#job-list").addEventListener("mouseover", (e) => {
+    const c = e.target.closest(".job");
+    clearTimeout(hoverTimer);
+    if (c) hoverTimer = setTimeout(() => jobDetails(c.dataset.id).catch(() => {}), 80);
+  });
   $("#category-opts").addEventListener("click", (e) => {
     const t = e.target.closest("[data-toggle]");
     if (!t) return;

@@ -123,7 +123,8 @@ docker run -p 8000:8000 -v postedfresh-data:/data postedfresh
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/jobs` | Search with filters (`q`, `place`, `job_type`, `category`, `level`, `company` take `\|`-separated values; plus `remote` (remote/hybrid/onsite), `posted_within_hours`, `salary_only`, `visa`, `no_degree`, `sort`, `limit`, `offset`); returns jobs and filter counts |
+| `GET /api/jobs` | Search with filters (`q`, `place`, `job_type`, `category`, `level`, `company` take `\|`-separated values; plus `remote` (remote/hybrid/onsite), `posted_within_hours`, `salary_only`, `visa`, `no_degree`, `sort`, `limit`, `offset`); returns jobs and filter counts (`facets=false` skips the counts) |
+| `GET /api/facets` | Just the filter counts for the same filters, so the page can show jobs first |
 | `GET /api/jobs/{id}` | One job, with description, pay and highlights |
 | `GET /api/stream` | Live updates: `{type: "new_jobs", jobs: [...]}` as they're found |
 | `GET /api/meta` | Stats, filter options and the status of each source |

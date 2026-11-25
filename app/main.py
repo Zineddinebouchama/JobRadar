@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -80,6 +81,7 @@ async def _keep_counts_warm() -> None:
 
 
 app = FastAPI(title="PostedFresh", version="2.0", lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=1000)  # job lists shrink to about a fifth
 
 
 # --------------------------------------------------------------------------- #
@@ -100,6 +102,19 @@ async def list_jobs(
     if facets:
         out["facets"] = await asyncio.to_thread(db.facets, f)
     return out
+
+
+@app.get("/api/facets")
+async def list_facets(
+    q: str = "", category: str = "", job_type: str = "", level: str = "", company: str = "",
+    place: str = "", remote: str = "any", posted_within_hours: int = 0, salary_only: bool = False,
+    visa: bool = False, no_degree: bool = False,
+):
+    """Filter counts on their own, so the job list never waits for them."""
+    f = dict(q=q, category=category, job_type=job_type, level=level, company=company, place=place,
+             remote=remote, posted_within_hours=posted_within_hours, salary_only=salary_only,
+             visa=visa, no_degree=no_degree)
+    return await asyncio.to_thread(db.facets, f)
 
 
 @app.get("/api/jobs/{job_id:path}")

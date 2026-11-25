@@ -267,6 +267,7 @@ def _reclassify(c: sqlite3.Connection) -> None:
             c.executemany("UPDATE jobs SET category=?, job_type=?, level=?, workplace=?, visa=?, no_degree=? WHERE id=?", updates)
             c.commit()
     _facet_cache.clear()
+    _place_cache.clear()
     with _lock:
         keyrows = c.execute("SELECT id, company, title, location_display FROM jobs").fetchall()
         upd = []
@@ -278,6 +279,7 @@ def _reclassify(c: sqlite3.Connection) -> None:
         c.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('classify_version', ?)", (CLASSIFY_VERSION,))
         c.commit()
     _facet_cache.clear()
+    _place_cache.clear()
 
 
 def _fill_logos(c: sqlite3.Connection) -> None:
@@ -582,13 +584,15 @@ def _build_where(filters: dict[str, Any]) -> tuple[str, list[Any]]:
 
 def search(filters: dict[str, Any], sort: str = "newest", limit: int = 50, offset: int = 0):
     clause, args = _build_where(filters)
+    # Counting jobs in a place is quickest starting from that place's own list.
+    count_clause = clause.replace("is_dup = 0", "+is_dup = 0", 1) if filters.get("place") else clause
     if sort == "relevance" and (filters.get("q") or "").strip():
         # bm25 with title weighted highest, then company/department, then body text.
         terms = [re.sub(r'["*^():]', " ", t).strip() for t in filters["q"].split()]
         match = " AND ".join(f'"{t}"' for t in terms if t)
         if True:
             c = reader()
-            total = c.execute(f"SELECT COUNT(*) FROM jobs {clause}", args).fetchone()[0]
+            total = c.execute(f"SELECT COUNT(*) FROM jobs {count_clause}", args).fetchone()[0]
             rows = c.execute(
                 f"SELECT {LIST_COLUMNS} FROM jobs JOIN (SELECT rowid AS rid, bm25(jobs_fts, 12.0, 6.0, 4.0, 3.0, 1.0) AS rank "
                 f"FROM jobs_fts WHERE jobs_fts MATCH ?) r ON r.rid = jobs.rowid {clause} "
@@ -603,7 +607,7 @@ def search(filters: dict[str, Any], sort: str = "newest", limit: int = 50, offse
     }.get(sort, "posted_at DESC")
     if True:
         c = reader()
-        total = c.execute(f"SELECT COUNT(*) FROM jobs {clause}", args).fetchone()[0]
+        total = c.execute(f"SELECT COUNT(*) FROM jobs {count_clause}", args).fetchone()[0]
         rows = c.execute(
             f"SELECT {LIST_COLUMNS} FROM jobs {clause} ORDER BY {order} LIMIT ? OFFSET ?",
             [*args, limit, offset],
@@ -645,47 +649,37 @@ def _facets(filters: dict[str, Any]) -> dict[str, list[list[Any]]]:
     return {k: f.result() for k, f in jobs.items()}
 
 
+_place_cache: dict[str, tuple[float, list]] = {}
+
+
 def _place_counts(filters: dict[str, Any]) -> list[list[Any]]:
+    # Place counts ignore the chosen place, so picking a city reuses the counts
+    # already worked out for the same other filters.
     others = {k: v for k, v in filters.items() if k != "place"}
+    key = json.dumps(others, sort_keys=True)
+    hit = _place_cache.get(key)
+    if hit and time.time() - hit[0] < FACET_TTL:
+        return hit[1]
     clause, args = _build_where(others)
     rows = reader().execute(
         f"SELECT p.place, p.kind, COUNT(*) n FROM job_places p JOIN jobs ON jobs.id = p.job_id {clause} "
         f"GROUP BY p.place, p.kind ORDER BY n DESC LIMIT 4000", args).fetchall()
-    return [[r[0], r[2], r[1]] for r in rows]
+    result = [[r[0], r[2], r[1]] for r in rows]
+    if len(_place_cache) > 200:
+        _place_cache.clear()
+    _place_cache[key] = (time.time(), result)
+    return result
 
 
 def _value_counts(filters: dict[str, Any], key: str) -> list[list[Any]]:
     others = {k: v for k, v in filters.items() if k != key}
     clause, args = _build_where(others)
+    if others.get("place"):
+        clause = clause.replace("is_dup = 0", "+is_dup = 0", 1)  # start from the place's own list
     rows = reader().execute(
         f"SELECT {key}, COUNT(*) n FROM jobs {clause} AND {key} IS NOT NULL AND {key} != '' "
         f"GROUP BY {key} ORDER BY n DESC LIMIT ?", [*args, 600 if key == "company" else 100]).fetchall()
     return [[r[0], r[1]] for r in rows]
-
-
-def _facets_sequential_unused(filters: dict[str, Any]) -> dict[str, list[list[Any]]]:
-    out: dict[str, list[list[Any]]] = {}
-    limits = {"company": 600}
-    if True:
-        c = reader()
-        others = {k: v for k, v in filters.items() if k != "place"}
-        clause, args = _build_where(others)
-        rows = c.execute(
-            f"SELECT p.place, p.kind, COUNT(*) n FROM job_places p JOIN jobs ON jobs.id = p.job_id {clause} "
-            f"GROUP BY p.place, p.kind ORDER BY n DESC LIMIT 4000",
-            args,
-        ).fetchall()
-        out["place"] = [[r[0], r[2], r[1]] for r in rows]
-        for key in ("category", "job_type", "level", "company"):
-            others = {k: v for k, v in filters.items() if k != key}
-            clause, args = _build_where(others)
-            extra = f"{'AND' if clause else 'WHERE'} {key} IS NOT NULL AND {key} != ''"
-            rows = c.execute(
-                f"SELECT {key}, COUNT(*) n FROM jobs {clause} {extra} GROUP BY {key} ORDER BY n DESC LIMIT ?",
-                [*args, limits.get(key, 100)],
-            ).fetchall()
-            out[key] = [[r[0], r[1]] for r in rows]
-    return out
 
 
 def stats() -> dict[str, int]:

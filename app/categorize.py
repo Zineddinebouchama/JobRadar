@@ -312,12 +312,25 @@ _HARDWARE_HINT = re.compile(r"hardware|mechanical|electrical|manufactur|producti
                             r"propulsion|avionics|starship|starlink|falcon|dragon|build|facilities|plant|factory", re.I)
 
 
+_TECH_SALES = re.compile(r"solutions? consultant|pre-?sales|technical sales|tech sales", re.I)
+_ARCHITECT = re.compile(r"solutions? architect", re.I)
+_SALES_TEAM = re.compile(r"pre-?sales|\bsales\b|go[- ]to[- ]market|\bgtm\b", re.I)
+_AFTER_SALE = re.compile(r"post[- ]?sales|professional services|implementation", re.I)
+
+
 def categorize(title: str, hints: list[str] | None = None) -> str:
     title = title or ""
     main = main_title(title)
     # "Research Scientist, Materials Chemistry" is lab science, not machine learning.
     if re.search(r"research (scientist|engineer)|^scientist", main, re.I) and _LAB_SCIENCE.search(title):
         return "Science & Research"
+    # Tech sales: solutions consultants and presales roles sell the product, and a
+    # solutions architect counts when the job is clearly part of the sales team.
+    if not _AFTER_SALE.search(title):
+        if _TECH_SALES.search(main):
+            return "Sales"
+        if _ARCHITECT.search(main) and _SALES_TEAM.search(title + " " + " ".join(h for h in (hints or []) if h)):
+            return "Sales"
     for cat, rx in _HEAD_COMPILED:  # what the person actually does
         if rx.search(main):
             return cat

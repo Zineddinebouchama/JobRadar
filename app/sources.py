@@ -266,7 +266,7 @@ SOURCES: dict[str, dict[str, Any]] = {
     "amazon": {"label": "Amazon", "kind": "Company career pages", "boards": 1,
                "quick": feeds.amazon_quick, "fetch": feeds.amazon_full, "quick_every": 60, "full_every": 180},
     "himalayas": {"label": "Himalayas", "kind": "Job board", "quick": feeds.himalayas_quick, "fetch": feeds.himalayas_full,
-                  "quick_every": 60, "full_every": 120},
+                  "quick_every": 60, "full_every": 300},
     "arbeitnow": {"label": "Arbeitnow", "kind": "Job board", "quick": feeds.arbeitnow_quick, "fetch": feeds.arbeitnow_full,
                   "quick_every": 60, "full_every": 900},
     "jobicy": {"label": "Jobicy", "kind": "Job board", "quick": feeds.jobicy_quick, "fetch": feeds.jobicy_full,

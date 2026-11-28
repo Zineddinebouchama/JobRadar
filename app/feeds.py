@@ -77,30 +77,49 @@ def _himalayas_job(j: dict) -> dict:
     )
 
 
-async def _himalayas_pages(client, cursor: str | None, pages: int) -> tuple[list[dict], str | None]:
+async def _himalayas_pages(client, cursor: str | None, pages: int,
+                            until_known: bool = False) -> tuple[list[dict], str | None, bool]:
+    """Returns (jobs, where to continue, reached the end). When the board asks us to
+    slow down, what was read so far is kept and the next run carries on from there.
+    With until_known, reading stops at the first page of jobs we already have."""
     out: list[dict] = []
-    for _ in range(pages):
-        data = await _get(client, HIMALAYAS_URL, limit=20, **({"cursor": cursor} if cursor else {}))
-        out += [_himalayas_job(j) for j in data.get("jobs", []) if j.get("title")]
-        cursor = data.get("nextCursor")
-        if not cursor:
-            break
-        await asyncio.sleep(0.25)  # be polite
-    return out, cursor
+    for i in range(pages):
+        try:
+            data = await _get(client, HIMALAYAS_URL, limit=20, **({"cursor": cursor} if cursor else {}))
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429 and out:
+                return out, cursor, False
+            raise
+        page = [_himalayas_job(j) for j in data.get("jobs", []) if j.get("title")]
+        out += page
+        if until_known and i >= 2 and page:
+            known = await asyncio.to_thread(db.known_ids, [j["id"] for j in page])
+            if len(known) == len(page):
+                return out, None, False
+        nxt = data.get("nextCursor")
+        if not nxt:
+            return out, None, True
+        cursor = nxt
+        await asyncio.sleep(1.0)  # be polite
+    return out, cursor, False
 
 
 async def himalayas_quick(client) -> list[dict]:
-    jobs, _ = await _himalayas_pages(client, None, 3)
+    # The newest few pages, plus however many more it takes to reach jobs we
+    # already have, so nothing slips through after a pause (like a sleeping laptop).
+    jobs, _, _ = await _himalayas_pages(client, None, 25, until_known=True)
     return jobs
 
 
 async def himalayas_full(client) -> list[dict]:
+    # Newest jobs first, every time; then a small step through the older ones.
+    jobs = await himalayas_quick(client)
     p = _progress("himalayas")
     if p.get("done_at") and time.time() - p["done_at"] < 12 * 3600:
-        return await himalayas_quick(client)  # finished recently; just stay current
-    jobs, cursor = await _himalayas_pages(client, p.get("cursor"), 60)
-    _save_progress("himalayas", {"cursor": cursor} if cursor else {"done_at": time.time()})
-    return jobs
+        return jobs  # caught up recently; just stay current
+    older, cursor, done = await _himalayas_pages(client, p.get("cursor"), 15)
+    _save_progress("himalayas", {"done_at": time.time()} if done else {"cursor": cursor})
+    return jobs + older
 
 
 # --------------------------------------------------------------------------- #

@@ -695,6 +695,14 @@ def stats() -> dict[str, int]:
         }
 
 
+def known_ids(ids: list[str]) -> set[str]:
+    """Which of these jobs are already stored."""
+    if not ids:
+        return set()
+    q = f"SELECT id FROM jobs WHERE id IN ({','.join('?' * len(ids))})"
+    return {r[0] for r in reader().execute(q, ids)}
+
+
 def ids_with_prefix(prefix: str) -> set[str]:
     with _lock:
         return {r[0] for r in conn().execute("SELECT id FROM jobs WHERE id >= ? AND id < ?", (prefix, prefix + "\uffff"))}
